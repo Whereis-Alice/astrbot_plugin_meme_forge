@@ -54,6 +54,32 @@ class MemeEngineTests(unittest.TestCase):
         self.assertEqual(match.meme.key, "bubble_tea")
         self.assertEqual(match.argument_text, "双手")
 
+    def test_random_meme_uses_all_enabled_runtime_memes(self) -> None:
+        builtin = SimpleNamespace(
+            key="builtin",
+            info=SimpleNamespace(keywords=[]),
+        )
+        extension = SimpleNamespace(
+            key="meme_emoji_extension",
+            info=SimpleNamespace(keywords=[]),
+        )
+        disabled = SimpleNamespace(
+            key="disabled",
+            info=SimpleNamespace(keywords=[]),
+        )
+        engine = MemeEngine({"disabled_memes": ["disabled"]})
+        engine.memes = [builtin, extension, disabled]
+
+        with patch(
+            "astrbot_plugin_meme_forge.core.engine.random.choice",
+            side_effect=lambda candidates: candidates[-1],
+        ) as choose:
+            selected = engine.random_meme()
+
+        self.assertIs(selected, extension)
+        choose.assert_called_once()
+        self.assertEqual(choose.call_args.args[0], [builtin, extension])
+
     def test_every_runtime_option_accepts_a_typed_value(self) -> None:
         checked = 0
         for meme in self.engine.memes:

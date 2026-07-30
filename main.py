@@ -22,6 +22,10 @@ from .utils import compress_static_image
 PLUGIN_ID = "astrbot_plugin_meme_forge"
 
 
+class GenerationBusyError(RuntimeError):
+    """Raised when all configured generation slots are occupied."""
+
+
 class MemeForgePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -35,6 +39,7 @@ class MemeForgePlugin(Star):
         parallel = max(1, int(self._config_value("max_parallel_generations", 2)))
         self._generation_slots = asyncio.Semaphore(parallel)
         self._resource_task: asyncio.Task[None] | None = None
+        self._recent_memes: dict[str, list[tuple[str, str]]] = {}
 
     def _config_value(self, key: str, default: Any) -> Any:
         try:
@@ -44,6 +49,34 @@ class MemeForgePlugin(Star):
                 return self.config[key]
             except (KeyError, TypeError):
                 return default
+
+    @staticmethod
+    def _recent_history_key(event: AstrMessageEvent) -> str:
+        return f"{event.get_platform_name()}:{event.get_sender_id()}"
+
+    def _remember_meme(
+        self,
+        event: AstrMessageEvent,
+        meme: Any,
+        trigger: str | None = None,
+    ) -> None:
+        """Keep the latest three distinct memes for this sender and platform."""
+        key = str(getattr(meme, "key", "")).strip()
+        if not key:
+            return
+        name = str(trigger or "").strip()
+        if not name:
+            keywords = self.engine.get_keywords(meme)
+            name = keywords[0] if keywords else key
+
+        history_key = self._recent_history_key(event)
+        history = [
+            entry
+            for entry in self._recent_memes.get(history_key, [])
+            if entry[1] != key
+        ]
+        history.insert(0, (name, key))
+        self._recent_memes[history_key] = history[:3]
 
     async def initialize(self) -> None:
         await self.engine.initialize()
@@ -230,6 +263,92 @@ class MemeForgePlugin(Star):
             f"meme_emoji 兼容扩展 {status.tag or ''} 已安装。请重启 AstrBot 后使用。"
         )
 
+    async def _generate_meme(
+        self,
+        event: AstrMessageEvent,
+        meme: Any,
+        argument_text: str,
+    ) -> tuple[bytes, dict[str, Any]]:
+        """Collect event input and run one meme through the shared safeguards."""
+        params = self.engine.get_params(meme)
+        inputs = await self.collector.collect(event, params, argument_text)
+
+        wait_timeout = min(10.0, float(self._config_value("generation_timeout", 30)))
+        try:
+            await asyncio.wait_for(self._generation_slots.acquire(), wait_timeout)
+        except asyncio.TimeoutError as exc:
+            raise GenerationBusyError from exc
+
+        try:
+            timeout = float(self._config_value("generation_timeout", 30))
+            image = await asyncio.wait_for(
+                self.engine.generate(meme, inputs),
+                timeout=timeout,
+            )
+        finally:
+            self._generation_slots.release()
+
+        if self._config_value("compress_output", True):
+            max_size = max(128, int(self._config_value("max_output_size", 512)))
+            try:
+                image = await asyncio.to_thread(compress_static_image, image, max_size)
+            except (OSError, ValueError) as exc:
+                logger.warning("[meme_forge] 输出图片压缩失败，发送原图: %s", exc)
+
+        return image, inputs.options
+
+    @filter.command("meme工坊随机", alias={"随机meme"})
+    async def random_meme(self, event: AstrMessageEvent):
+        """从当前已加载且未禁用的完整 meme 库中随机生成一个。"""
+        meme = self.engine.random_meme()
+        if meme is None:
+            yield event.plain_result("当前没有可用的 meme，请检查资源或禁用列表。")
+            return
+
+        event.stop_event()
+        self._remember_meme(event, meme)
+        try:
+            image, option_values = await self._generate_meme(event, meme, "")
+        except InputCollectionError as exc:
+            yield event.plain_result(
+                f"随机选中的 meme「{meme.key}」无法使用当前输入：{exc}"
+            )
+            return
+        except GenerationBusyError:
+            yield event.plain_result("当前生成任务较多，请稍后再试。")
+            return
+        except asyncio.TimeoutError:
+            logger.warning("[meme_forge] 随机生成 %s 超时", meme.key)
+            yield event.plain_result("随机 meme 生成超时。")
+            return
+        except MemeGenerationError as exc:
+            yield event.plain_result(str(exc))
+            return
+        except Exception:  # noqa: BLE001 - native generators expose varied failures
+            logger.exception("[meme_forge] 随机生成 %s 时发生异常", meme.key)
+            yield event.plain_result("随机 meme 生成失败，请查看 AstrBot 日志。")
+            return
+
+        logger.info(
+            "[meme_forge] 随机 meme=%s option_keys=%s",
+            meme.key,
+            sorted(option_values),
+        )
+        yield event.chain_result([Comp.Image.fromBytes(image)])
+
+    @filter.command("meme工坊最近", alias={"最近meme"})
+    async def recent_memes(self, event: AstrMessageEvent):
+        """Show this sender's latest three distinct meme triggers."""
+        history = self._recent_memes.get(self._recent_history_key(event), [])
+        if not history:
+            yield event.plain_result("你还没有触发过 meme。")
+            return
+
+        lines = ["最近触发的 meme（从新到旧）："]
+        for index, (name, key) in enumerate(history, start=1):
+            lines.append(f"{index}. {name}（key: {key}）")
+        yield event.plain_result("\n".join(lines))
+
     @filter.event_message_type(EventMessageType.ALL)
     async def meme_handle(self, event: AstrMessageEvent):
         """匹配触发词并生成 meme。"""
@@ -252,27 +371,20 @@ class MemeForgePlugin(Star):
         if self.engine.is_disabled(match.meme):
             return
         event.stop_event()
+        self._remember_meme(event, match.meme, match.trigger)
 
-        params = self.engine.get_params(match.meme)
         try:
-            inputs = await self.collector.collect(event, params, match.argument_text)
+            image, option_values = await self._generate_meme(
+                event,
+                match.meme,
+                match.argument_text,
+            )
         except InputCollectionError as exc:
             yield event.plain_result(f"参数解析失败：{exc}")
             return
-
-        wait_timeout = min(10.0, float(self._config_value("generation_timeout", 30)))
-        try:
-            await asyncio.wait_for(self._generation_slots.acquire(), wait_timeout)
-        except asyncio.TimeoutError:
+        except GenerationBusyError:
             yield event.plain_result("当前生成任务较多，请稍后再试。")
             return
-
-        try:
-            timeout = float(self._config_value("generation_timeout", 30))
-            image = await asyncio.wait_for(
-                self.engine.generate(match.meme, inputs),
-                timeout=timeout,
-            )
         except asyncio.TimeoutError:
             logger.warning("[meme_forge] 生成 %s 超时", match.meme.key)
             yield event.plain_result("meme 生成超时。")
@@ -284,21 +396,12 @@ class MemeForgePlugin(Star):
             logger.exception("[meme_forge] 生成 %s 时发生异常", match.meme.key)
             yield event.plain_result("meme 生成失败，请查看 AstrBot 日志。")
             return
-        finally:
-            self._generation_slots.release()
-
-        if self._config_value("compress_output", True):
-            max_size = max(128, int(self._config_value("max_output_size", 512)))
-            try:
-                image = await asyncio.to_thread(compress_static_image, image, max_size)
-            except (OSError, ValueError) as exc:
-                logger.warning("[meme_forge] 输出图片压缩失败，发送原图: %s", exc)
 
         logger.info(
             "[meme_forge] 触发 meme=%s trigger=%s option_keys=%s",
             match.meme.key,
             match.trigger,
-            sorted(inputs.options),
+            sorted(option_values),
         )
         yield event.chain_result([Comp.Image.fromBytes(image)])
 

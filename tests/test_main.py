@@ -4,10 +4,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from astrbot.core import AstrBotConfig
 
 from astrbot_plugin_meme_forge.core.arguments import strip_trigger_prefix
+from astrbot_plugin_meme_forge.main import MemeForgePlugin
 
 
 class TriggerPrefixTests(unittest.TestCase):
@@ -45,6 +47,43 @@ class PluginSchemaTests(unittest.TestCase):
                 schema=schema,
             )
         self.assertEqual(config["keyword_aliases"], [])
+
+
+class RecentMemeTests(unittest.TestCase):
+    class Event:
+        def __init__(self, sender_id: str, platform: str = "test") -> None:
+            self.sender_id = sender_id
+            self.platform = platform
+
+        def get_sender_id(self) -> str:
+            return self.sender_id
+
+        def get_platform_name(self) -> str:
+            return self.platform
+
+    def test_keeps_three_distinct_memes_per_sender(self) -> None:
+        plugin = MemeForgePlugin.__new__(MemeForgePlugin)
+        plugin._recent_memes = {}
+        plugin.engine = SimpleNamespace(get_keywords=lambda meme: [meme.keyword])
+        event = self.Event("alice")
+        memes = [SimpleNamespace(key=f"meme_{index}", keyword=f"表情{index}") for index in range(4)]
+
+        for meme in memes:
+            plugin._remember_meme(event, meme)
+
+        history = plugin._recent_memes["test:alice"]
+        self.assertEqual([entry[1] for entry in history], ["meme_3", "meme_2", "meme_1"])
+
+        plugin._remember_meme(event, memes[1], "自定义触发词")
+        self.assertEqual(
+            plugin._recent_memes["test:alice"],
+            [("自定义触发词", "meme_1"), ("表情3", "meme_3"), ("表情2", "meme_2")],
+        )
+
+        other_event = self.Event("bob")
+        self.assertNotIn("test:bob", plugin._recent_memes)
+        plugin._remember_meme(other_event, memes[0])
+        self.assertEqual(plugin._recent_memes["test:bob"], [("表情0", "meme_0")])
 
 
 if __name__ == "__main__":

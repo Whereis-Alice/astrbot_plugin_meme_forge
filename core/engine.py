@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import io
 import os
+import random
 import sys
 from dataclasses import dataclass
 from typing import Any
@@ -181,6 +182,16 @@ class MemeEngine:
             len(self._trigger_map),
             self.version,
         )
+
+    def available_memes(self) -> list[Any]:
+        """Return loaded memes that are not disabled by the current config."""
+        self._refresh_aliases()
+        return [meme for meme in self.memes if not self.is_disabled(meme)]
+
+    def random_meme(self) -> Any | None:
+        """Choose one enabled meme from the complete runtime-loaded library."""
+        candidates = self.available_memes()
+        return random.choice(candidates) if candidates else None
 
     def _refresh_aliases(self) -> None:
         # Configuration can be edited in WebUI without reloading the plugin.
