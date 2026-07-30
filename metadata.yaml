@@ -1,7 +1,11 @@
-name: astrbot_plugin_memelite 
-display_name: 表情包生成器
-desc: 表情包生成器，制作各种沙雕表情
-help: 略
-version: v3.0.3
-author: Zhalslar
-repo: https://github.com/Zhalslar/astrbot_plugin_memelite
+name: astrbot_plugin_meme_forge
+display_name: Meme 工坊
+desc: 支持完整选项参数、回复图片和 meme_emoji 扩展的本地表情包生成插件。
+version: v1.0.0
+author: Whereis-Alice
+repo: https://github.com/Whereis-Alice/astrbot_plugin_meme_forge
+astrbot_version: ">=4.16,<5"
+tags:
+  - meme
+  - image
+  - utility

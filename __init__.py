@@ -1,0 +1,1 @@
+"""Meme Forge for AstrBot."""

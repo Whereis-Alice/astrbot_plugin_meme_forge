@@ -1,49 +1,123 @@
 {
-    "need_prefix": {
-        "description": "启用触发前缀",
-        "hint": "启用后需要前缀或者@bot来触发meme",
-        "type": "bool",
-        "default": true
+  "require_wake": {
+    "description": "要求先唤醒机器人",
+    "hint": "开启后，群聊需要 AstrBot 唤醒前缀或 @机器人；私聊遵循 AstrBot 的私聊唤醒设置。",
+    "type": "bool",
+    "default": true
+  },
+  "trigger_prefix": {
+    "description": "Meme 工坊触发前缀",
+    "hint": "默认使用 /meme 关键词 参数，与原 memelite 插件隔离。设为空字符串后可直接使用 /关键词 参数。",
+    "type": "string",
+    "default": "meme"
+  },
+  "fuzzy_match": {
+    "description": "模糊匹配触发词",
+    "hint": "开启后会在整条消息中查找关键词，容易误触发，默认关闭。",
+    "type": "bool",
+    "default": false
+  },
+  "keyword_aliases": {
+    "description": "自定义关键词别名",
+    "hint": "将自定义触发词映射到已有 meme 名称或关键词。配置修改后立即生效。",
+    "type": "template_list",
+    "templates": {
+      "alias_mapping": {
+        "name": "关键词别名",
+        "items": {
+          "alias": {
+            "description": "自定义触发词",
+            "type": "string",
+            "default": ""
+          },
+          "original": {
+            "description": "已有名称或关键词",
+            "type": "string",
+            "default": ""
+          }
+        }
+      }
     },
-    "extra_prefix": {
-        "description": "'额外前缀",
-        "hint": "填写后, 需要额外附加一个前缀来触发meme, 留空则不启用",
-        "type": "string",
-        "default": ""
+    "default": []
+  },
+  "disabled_memes": {
+    "description": "禁用的 meme",
+    "hint": "推荐通过 /meme工坊禁用 和 /meme工坊启用 管理，内部保存稳定的 meme key。",
+    "type": "list",
+    "default": []
+  },
+  "generation_timeout": {
+    "description": "单次生成超时（秒）",
+    "type": "int",
+    "slider": {
+      "min": 10,
+      "max": 120,
+      "step": 5
     },
-    "fuzzy_match": {
-        "description": "是否模糊匹配触发",
-        "type": "bool",
-        "hint": "消息中含有关键词即可触发meme，谨慎打开，容易误触",
-        "default": false
+    "default": 30
+  },
+  "max_parallel_generations": {
+    "description": "最大并行生成数",
+    "hint": "限制同时运行的 CPU 密集型生成任务，防止突发请求拖慢 AstrBot。重载插件后生效。",
+    "type": "int",
+    "slider": {
+      "min": 1,
+      "max": 8,
+      "step": 1
     },
-    "is_compress_image": {
-        "description": "是否压缩图片",
-        "type": "bool",
-        "hint": "压缩长或宽超过512px的静态生成图，防止大图展示，可防刷屏",
-        "default": true
+    "default": 2
+  },
+  "compress_output": {
+    "description": "压缩过大的静态输出图",
+    "hint": "GIF 等动画不会被压缩。",
+    "type": "bool",
+    "default": true
+  },
+  "max_output_size": {
+    "description": "静态输出图最大边长",
+    "type": "int",
+    "slider": {
+      "min": 256,
+      "max": 2048,
+      "step": 128
     },
-    "is_check_resources": {
-        "description": "启动时检查资源",
-        "type": "bool",
-        "hint": "每次启动本插件时，检查一遍meme所需资源，缺失资源会自动下载，确保资源下载完整时可关掉这个选项，关掉可优化启动性能",
-        "default": true
+    "default": 512
+  },
+  "max_input_image_mb": {
+    "description": "单张输入图片上限（MB）",
+    "type": "int",
+    "slider": {
+      "min": 1,
+      "max": 100,
+      "step": 1
     },
-    "meme_timeout": {
-        "description": "meme生成的超时时长",
-        "type": "int",
-        "hint": "meme生成超时，单位秒",
-        "slider": {
-            "min": 10,
-            "max": 120,
-            "step": 5
-        },
-        "default": 15
+    "default": 20
+  },
+  "check_resources_on_start": {
+    "description": "启动时后台检查内置资源",
+    "hint": "默认关闭以避免启动阶段长时间等待；可手动执行 /meme工坊资源检查。",
+    "type": "bool",
+    "default": false
+  },
+  "resource_check_timeout": {
+    "description": "资源检查超时（秒）",
+    "type": "int",
+    "slider": {
+      "min": 30,
+      "max": 900,
+      "step": 30
     },
-    "memes_disabled_list": {
-        "description": "meme黑名单",
-        "type": "list",
-        "hint": "黑名单里的关键词会被屏蔽而无法触发meme",
-        "default": []
-    }
+    "default": 180
+  },
+  "extension_download_timeout": {
+    "description": "meme_emoji 扩展下载超时（秒）",
+    "hint": "扩展资源超过 400 MB，网络较慢时可适当调大。重载插件后生效。",
+    "type": "int",
+    "slider": {
+      "min": 300,
+      "max": 7200,
+      "step": 300
+    },
+    "default": 1800
+  }
 }
