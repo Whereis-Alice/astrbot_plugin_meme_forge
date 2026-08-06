@@ -1,7 +1,7 @@
 name: astrbot_plugin_meme_forge
 display_name: Meme 工坊
-desc: 支持完整选项参数、随机表情、最近记录和 meme_emoji 扩展的本地表情包生成插件。
-version: v1.1.0
+desc: 支持完整参数、随机表情、个人收藏和 meme_emoji 扩展的本地表情包生成插件。
+version: v1.2.0
 author: Whereis-Alice
 repo: https://github.com/Whereis-Alice/astrbot_plugin_meme_forge
 astrbot_version: ">=4.16,<5"

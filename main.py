@@ -17,13 +17,28 @@ from .core.arguments import strip_trigger_prefix
 from .core.collector import InputCollectionError, ParamsCollector
 from .core.engine import MemeEngine, MemeEngineError, MemeGenerationError
 from .core.extensions import ExtensionInstallError, MemeEmojiExtensionManager
+from .core.favorites import (
+    FavoriteEntry,
+    GeneratedMemeRecord,
+    MemeOutputIndex,
+    add_favorite,
+    dump_favorites,
+    normalize_favorites,
+    remove_favorite,
+)
 from .utils import compress_static_image
 
 PLUGIN_ID = "astrbot_plugin_meme_forge"
+OUTPUT_INDEX_KV_KEY = "generated_meme_outputs_v1"
+FAVORITES_KV_PREFIX = "meme_favorites_v1"
 
 
 class GenerationBusyError(RuntimeError):
     """Raised when all configured generation slots are occupied."""
+
+
+class FavoriteLookupError(RuntimeError):
+    """Raised when a quoted message cannot be mapped to a generated meme."""
 
 
 class MemeForgePlugin(Star):
@@ -40,6 +55,8 @@ class MemeForgePlugin(Star):
         self._generation_slots = asyncio.Semaphore(parallel)
         self._resource_task: asyncio.Task[None] | None = None
         self._recent_memes: dict[str, list[tuple[str, str]]] = {}
+        self._output_index = MemeOutputIndex(max_records=500)
+        self._storage_lock = asyncio.Lock()
 
     def _config_value(self, key: str, default: Any) -> Any:
         try:
@@ -78,8 +95,139 @@ class MemeForgePlugin(Star):
         history.insert(0, (name, key))
         self._recent_memes[history_key] = history[:3]
 
+    def _preferred_trigger(self, meme: Any, trigger: str | None = None) -> str:
+        trigger_text = str(trigger or "").strip()
+        if trigger_text:
+            return trigger_text
+        keywords = self.engine.get_keywords(meme)
+        return keywords[0] if keywords else str(getattr(meme, "key", "meme"))
+
+    def _format_trigger_command(self, trigger: str) -> str:
+        prefix = str(self._config_value("trigger_prefix", "meme")).strip()
+        if not prefix:
+            return f"/{trigger}"
+        separator = " " if prefix[-1].isalnum() else ""
+        return f"/{prefix}{separator}{trigger}"
+
+    @staticmethod
+    def _favorite_storage_key(event: AstrMessageEvent) -> str:
+        owner = f"{event.get_platform_name()}:{event.get_sender_id()}"
+        return f"{FAVORITES_KV_PREFIX}:{owner}"
+
+    @staticmethod
+    def _find_reply(event: AstrMessageEvent) -> Any | None:
+        return next(
+            (
+                component
+                for component in list(event.get_messages() or [])
+                if isinstance(component, Comp.Reply)
+            ),
+            None,
+        )
+
+    @classmethod
+    def _reply_images(cls, reply: Any) -> list[Any]:
+        images: list[Any] = []
+        seen_components: set[int] = set()
+        for attribute in ("chain", "message", "origin", "content"):
+            for component in list(getattr(reply, attribute, None) or []):
+                identity = id(component)
+                if identity in seen_components:
+                    continue
+                seen_components.add(identity)
+                if isinstance(component, Comp.Image):
+                    images.append(component)
+                elif isinstance(component, Comp.Reply):
+                    images.extend(cls._reply_images(component))
+        return images
+
+    async def _remember_generated_output(
+        self,
+        event: AstrMessageEvent,
+        meme: Any,
+        image: bytes,
+        trigger: str | None = None,
+    ) -> None:
+        key = str(getattr(meme, "key", "")).strip()
+        if not key:
+            return
+        async with self._storage_lock:
+            self._output_index.remember(
+                image,
+                session=event.unified_msg_origin,
+                key=key,
+                trigger=self._preferred_trigger(meme, trigger),
+            )
+            try:
+                await self.put_kv_data(OUTPUT_INDEX_KV_KEY, self._output_index.dump())
+            except Exception as exc:  # noqa: BLE001 - storage backends vary by install
+                logger.warning("[meme_forge] 保存已生成 meme 索引失败: %s", exc)
+
+    async def _match_quoted_meme(
+        self,
+        event: AstrMessageEvent,
+    ) -> GeneratedMemeRecord:
+        reply = self._find_reply(event)
+        if reply is None:
+            raise FavoriteLookupError("请引用 Bot 发送的 meme 图片后再使用该命令。")
+
+        reply_sender = str(
+            getattr(reply, "sender_id", None) or getattr(reply, "qq", None) or ""
+        )
+        self_id = str(event.get_self_id() or "")
+        if reply_sender not in {"", "0"} and self_id and reply_sender != self_id:
+            raise FavoriteLookupError("只能收藏 Bot 发送的 meme 图片。")
+
+        images = self._reply_images(reply)
+        if not images:
+            raise FavoriteLookupError("被引用的消息中没有图片。")
+
+        last_error: Exception | None = None
+        for image_component in images:
+            try:
+                image = await self.collector.read_image_component(image_component)
+            except (
+                InputCollectionError,
+                OSError,
+                aiohttp.ClientError,
+                asyncio.TimeoutError,
+            ) as exc:
+                last_error = exc
+                continue
+            if record := self._output_index.match(
+                image,
+                session=event.unified_msg_origin,
+            ):
+                return record
+
+        if last_error is not None:
+            raise FavoriteLookupError(f"读取被引用图片失败：{last_error}") from last_error
+        raise FavoriteLookupError(
+            "没有识别到这张图片对应的 Meme 工坊生成记录。"
+            "请确认引用的是本插件近期发送的 meme。"
+        )
+
+    async def _load_favorites(self, event: AstrMessageEvent) -> list[FavoriteEntry]:
+        raw = await self.get_kv_data(self._favorite_storage_key(event), [])
+        return normalize_favorites(raw)
+
+    async def _save_favorites(
+        self,
+        event: AstrMessageEvent,
+        favorites: list[FavoriteEntry],
+    ) -> None:
+        await self.put_kv_data(
+            self._favorite_storage_key(event),
+            dump_favorites(favorites),
+        )
+
     async def initialize(self) -> None:
         await self.engine.initialize()
+        try:
+            records = await self.get_kv_data(OUTPUT_INDEX_KV_KEY, [])
+            self._output_index = MemeOutputIndex(records, max_records=500)
+        except Exception as exc:  # noqa: BLE001 - storage backends vary by install
+            logger.warning("[meme_forge] 读取已生成 meme 索引失败: %s", exc)
         if self._config_value("check_resources_on_start", False):
             self._resource_task = asyncio.create_task(self._background_resource_check())
 
@@ -130,6 +278,7 @@ class MemeForgePlugin(Star):
                 f"{self.engine.format_info(meme)}\n\n预览生成失败：{exc}"
             )
             return
+        await self._remember_generated_output(event, meme, preview, keyword)
         yield event.chain_result(
             [Comp.Plain(self.engine.format_info(meme)), Comp.Image.fromBytes(preview)]
         )
@@ -263,6 +412,136 @@ class MemeForgePlugin(Star):
             f"meme_emoji 兼容扩展 {status.tag or ''} 已安装。请重启 AstrBot 后使用。"
         )
 
+    @filter.command("meme工坊收藏", alias={"meme收藏"})
+    async def favorite_meme(self, event: AstrMessageEvent):
+        """收藏被引用的 Meme 工坊图片。"""
+        event.stop_event()
+        try:
+            record = await self._match_quoted_meme(event)
+        except FavoriteLookupError as exc:
+            yield event.plain_result(str(exc))
+            return
+
+        entry = FavoriteEntry(key=record.key, trigger=record.trigger)
+        max_favorites = max(1, int(self._config_value("max_favorites", 50)))
+        evicted: list[FavoriteEntry] = []
+        try:
+            async with self._storage_lock:
+                favorites = await self._load_favorites(event)
+                updated, is_new = add_favorite(
+                    favorites,
+                    entry,
+                    max_favorites=max_favorites,
+                )
+                updated_keys = {favorite.key for favorite in updated}
+                evicted = [
+                    favorite
+                    for favorite in favorites
+                    if favorite.key not in updated_keys
+                ]
+                await self._save_favorites(event, updated)
+        except Exception as exc:  # noqa: BLE001 - storage backends vary by install
+            logger.exception("[meme_forge] 保存收藏失败")
+            yield event.plain_result(f"收藏保存失败：{exc}")
+            return
+
+        action = "已收藏" if is_new else "已在收藏夹中，并移到最前"
+        lines = [
+            f"{action}：{record.trigger}（key: {record.key}）",
+            f"下次可用：{self._format_trigger_command(record.trigger)}",
+        ]
+        if len(evicted) == 1:
+            removed = evicted[0]
+            lines.append(
+                f"收藏已达上限，已移除最早收藏：{removed.trigger}"
+                f"（key: {removed.key}）"
+            )
+        elif evicted:
+            removed = "、".join(
+                f"{favorite.trigger}（key: {favorite.key}）"
+                for favorite in evicted
+            )
+            lines.append(f"收藏上限已降低，已移除较早收藏：{removed}")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("meme工坊收藏夹", alias={"meme收藏夹"})
+    async def favorite_list(self, event: AstrMessageEvent):
+        """查看当前用户的 Meme 收藏夹。"""
+        try:
+            async with self._storage_lock:
+                favorites = await self._load_favorites(event)
+        except Exception as exc:  # noqa: BLE001 - storage backends vary by install
+            logger.exception("[meme_forge] 读取收藏失败")
+            yield event.plain_result(f"收藏读取失败：{exc}")
+            return
+
+        if not favorites:
+            yield event.plain_result(
+                "你的收藏夹还是空的。请引用 Bot 发送的 meme 后回复 /meme收藏。"
+            )
+            return
+
+        lines = [f"你的 Meme 收藏（{len(favorites)} 个）："]
+        for index, entry in enumerate(favorites, start=1):
+            meme = self.engine.resolve(entry.key)
+            trigger = entry.trigger
+            status = ""
+            if meme is None:
+                status = "，当前未加载"
+            elif self.engine.resolve(trigger) is not meme:
+                trigger = self._preferred_trigger(meme)
+            lines.append(
+                f"{index}. {trigger}（key: {entry.key}{status}）"
+                f"\n   命令：{self._format_trigger_command(trigger)}"
+            )
+        lines.append("使用 /meme取消收藏 <触发词> 可移除收藏。")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("meme工坊取消收藏", alias={"meme取消收藏"})
+    async def unfavorite_meme(
+        self,
+        event: AstrMessageEvent,
+        keyword: str | None = None,
+    ):
+        """Remove one meme from the current user's favorites."""
+        if not keyword:
+            yield event.plain_result("请指定要取消收藏的 meme 触发词。")
+            return
+
+        result_message: str | None = None
+        key: str | None = None
+        try:
+            async with self._storage_lock:
+                favorites = await self._load_favorites(event)
+                key = self.engine.canonical_key(keyword)
+                if key is None:
+                    key = next(
+                        (
+                            entry.key
+                            for entry in favorites
+                            if entry.key.casefold() == keyword.casefold()
+                            or entry.trigger.casefold() == keyword.casefold()
+                        ),
+                        None,
+                    )
+                if key is None:
+                    result_message = f"没有找到 meme：{keyword}"
+                else:
+                    updated, removed = remove_favorite(favorites, key)
+                    if not removed:
+                        result_message = f"{key} 当前不在收藏夹中。"
+                    else:
+                        await self._save_favorites(event, updated)
+        except Exception as exc:  # noqa: BLE001 - storage backends vary by install
+            logger.exception("[meme_forge] 删除收藏失败")
+            yield event.plain_result(f"取消收藏失败：{exc}")
+            return
+        if result_message is not None:
+            yield event.plain_result(result_message)
+            return
+        assert key is not None
+        yield event.plain_result(f"已取消收藏：{key}")
+
     async def _generate_meme(
         self,
         event: AstrMessageEvent,
@@ -329,6 +608,7 @@ class MemeForgePlugin(Star):
             yield event.plain_result("随机 meme 生成失败，请查看 AstrBot 日志。")
             return
 
+        await self._remember_generated_output(event, meme, image)
         logger.info(
             "[meme_forge] 随机 meme=%s option_keys=%s",
             meme.key,
@@ -397,6 +677,12 @@ class MemeForgePlugin(Star):
             yield event.plain_result("meme 生成失败，请查看 AstrBot 日志。")
             return
 
+        await self._remember_generated_output(
+            event,
+            match.meme,
+            image,
+            match.trigger,
+        )
         logger.info(
             "[meme_forge] 触发 meme=%s trigger=%s option_keys=%s",
             match.meme.key,

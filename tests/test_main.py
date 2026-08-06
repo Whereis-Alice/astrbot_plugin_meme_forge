@@ -47,6 +47,7 @@ class PluginSchemaTests(unittest.TestCase):
                 schema=schema,
             )
         self.assertEqual(config["keyword_aliases"], [])
+        self.assertEqual(config["max_favorites"], 50)
 
 
 class RecentMemeTests(unittest.TestCase):

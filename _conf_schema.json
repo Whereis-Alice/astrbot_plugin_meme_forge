@@ -46,6 +46,17 @@
     "type": "list",
     "default": []
   },
+  "max_favorites": {
+    "description": "每个用户最多收藏的 meme 数量",
+    "hint": "收藏按平台和用户 ID 独立保存；超出数量后会移除最早收藏的项目。",
+    "type": "int",
+    "slider": {
+      "min": 10,
+      "max": 200,
+      "step": 10
+    },
+    "default": 50
+  },
   "generation_timeout": {
     "description": "单次生成超时（秒）",
     "type": "int",
