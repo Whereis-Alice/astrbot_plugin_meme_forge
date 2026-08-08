@@ -39,6 +39,18 @@ The `meme_generator` Python package is the runtime generation engine. It is
 installed separately from PyPI through `requirements.txt` and is not copied
 into this plugin repository.
 
+## astrbot_plugin_meme_grabber
+
+- Project: https://github.com/XTsat/astrbot_plugin_meme_grabber
+- Author: XTsat and contributors
+- License: GNU Affero General Public License v3.0 or later
+
+本插件参考该项目的消息/引用表情提取交互，并将其功能重新实现为独立的
+`MemeGrabber` 模块。实现不依赖上游的内部 `AiocqhttpMessageEvent` 类型，避免
+AstrBot 或平台适配器升级造成的硬耦合；普通图片下载、大小限制和协议校验复用
+本插件已有的输入收集器。提取结果会暂存到插件数据目录，并按配置延迟清理，
+避免消息发送尚未完成时删除临时文件。
+
 ## No Endorsement
 
 References to upstream project names identify technical provenance only. They

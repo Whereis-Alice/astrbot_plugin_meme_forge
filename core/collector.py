@@ -171,6 +171,10 @@ class ParamsCollector:
         source = self._image_source(component)
         if not source:
             raise InputCollectionError("引用消息中没有可读取的图片地址")
+        return await self.read_image_source(source)
+
+    async def read_image_source(self, source: str) -> bytes:
+        """Read an adapter-provided image source with the configured safety limits."""
         return await self._decode_image(source)
 
     async def _read_image_component(

@@ -1,0 +1,11 @@
+{
+  "metadata": {
+    "display_name": "Meme Forge"
+  },
+  "pages": {
+    "meme-forge": {
+      "title": "Meme Forge",
+      "description": "Browse and manage loaded Meme templates."
+    }
+  }
+}

@@ -130,5 +130,73 @@
       "step": 300
     },
     "default": 1800
+  },
+  "grabber_enabled": {
+    "description": "启用表情提取",
+    "hint": "允许通过 /meme工坊提取 提取当前消息或引用消息中的图片、QQ 表情。",
+    "type": "bool",
+    "default": true
+  },
+  "grabber_send_mode": {
+    "description": "提取结果发送方式",
+    "hint": "动画表情始终作为文件发送，以避免部分平台丢失动画帧。",
+    "type": "string",
+    "options": ["file", "image"],
+    "default": "file"
+  },
+  "grabber_max_files": {
+    "description": "单次最多提取文件数",
+    "type": "int",
+    "slider": {
+      "min": 1,
+      "max": 20,
+      "step": 1
+    },
+    "default": 8
+  },
+  "grabber_retention_minutes": {
+    "description": "提取文件保留时间（分钟）",
+    "hint": "文件暂存于插件数据目录，超时后自动清理；发送完成后不会立即删除。",
+    "type": "int",
+    "slider": {
+      "min": 5,
+      "max": 10080,
+      "step": 5
+    },
+    "default": 60
+  },
+  "grabber_list_mode": {
+    "description": "提取功能群组范围",
+    "hint": "仅影响群聊；私聊不受此项限制。白名单和黑名单的群号每行一个。",
+    "type": "string",
+    "options": ["disabled", "whitelist", "blacklist"],
+    "default": "disabled"
+  },
+  "grabber_group_list": {
+    "description": "提取功能群号列表",
+    "type": "text",
+    "default": ""
+  },
+  "history_limit": {
+    "description": "最近生成记录上限",
+    "hint": "仅保存成功生成的 key、触发词、用户和会话信息，不保存图片内容。",
+    "type": "int",
+    "slider": {
+      "min": 100,
+      "max": 2000,
+      "step": 100
+    },
+    "default": 500
+  },
+  "dashboard_preview_max_mb": {
+    "description": "WebUI 单张预览和素材大小上限（MB）",
+    "hint": "超过此限制的图片不会传送到浏览器。",
+    "type": "int",
+    "slider": {
+      "min": 1,
+      "max": 16,
+      "step": 1
+    },
+    "default": 4
   }
 }

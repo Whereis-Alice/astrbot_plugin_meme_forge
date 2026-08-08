@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Meme 工坊</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">MF</div>
+          <div>
+            <p class="eyebrow">ASTRBOT PLUGIN</p>
+            <h1>Meme 工坊</h1>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button id="refresh-button" class="icon-button" type="button" title="刷新数据" aria-label="刷新数据">&#x21bb;</button>
+          <div class="theme-switch" role="group" aria-label="配色主题">
+            <button id="theme-light" type="button" aria-pressed="false">浅色</button>
+            <button id="theme-dark" type="button" aria-pressed="true">夜间</button>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <section class="overview" aria-label="运行概览">
+          <div class="metric">
+            <span>已加载</span>
+            <strong id="metric-total">--</strong>
+            <small>meme</small>
+          </div>
+          <div class="metric metric-cyan">
+            <span>可用</span>
+            <strong id="metric-enabled">--</strong>
+            <small>已启用</small>
+          </div>
+          <div class="metric metric-gold">
+            <span>已禁用</span>
+            <strong id="metric-disabled">--</strong>
+            <small>可单独恢复</small>
+          </div>
+          <div class="metric metric-violet">
+            <span>生成记录</span>
+            <strong id="metric-history">--</strong>
+            <small>不包含图片</small>
+          </div>
+          <div id="extension-state" class="extension-state" aria-live="polite">正在读取扩展状态...</div>
+        </section>
+
+        <section class="workbench" aria-label="表情包管理">
+          <div class="catalog-pane">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">LIBRARY</p>
+                <h2>表情库</h2>
+              </div>
+              <span id="catalog-count" class="count-badge">--</span>
+            </div>
+
+            <div class="filters">
+              <label class="search-field">
+                <span class="sr-only">搜索表情</span>
+                <input id="search-input" type="search" placeholder="搜索名称、关键词或标签" autocomplete="off" />
+              </label>
+              <label>
+                <span class="sr-only">标签</span>
+                <select id="tag-filter">
+                  <option value="">全部标签</option>
+                </select>
+              </label>
+              <label>
+                <span class="sr-only">启用状态</span>
+                <select id="status-filter">
+                  <option value="all">全部状态</option>
+                  <option value="enabled">仅已启用</option>
+                  <option value="disabled">仅已禁用</option>
+                </select>
+              </label>
+            </div>
+
+            <div id="catalog-message" class="region-message" aria-live="polite"></div>
+            <div id="meme-list" class="meme-list" aria-live="polite"></div>
+            <nav class="pager" aria-label="表情库分页">
+              <button id="previous-page" class="icon-button" type="button" title="上一页" aria-label="上一页">&#x2190;</button>
+              <span id="page-status">--</span>
+              <button id="next-page" class="icon-button" type="button" title="下一页" aria-label="下一页">&#x2192;</button>
+            </nav>
+          </div>
+
+          <aside id="detail-pane" class="detail-pane" aria-label="表情详情">
+            <div class="detail-empty">
+              <p class="eyebrow">INSPECT</p>
+              <h2>选择一个表情</h2>
+            </div>
+          </aside>
+        </section>
+
+        <section class="history-section" aria-label="最近生成记录">
+          <div class="section-heading history-heading">
+            <div>
+              <p class="eyebrow">RECENT ACTIVITY</p>
+              <h2>最近生成</h2>
+            </div>
+            <label class="history-scope">
+              <span class="sr-only">会话范围</span>
+              <select id="history-session-filter">
+                <option value="">全部会话</option>
+              </select>
+            </label>
+          </div>
+          <div id="history-message" class="region-message" aria-live="polite"></div>
+          <div class="history-table-wrap">
+            <table class="history-table">
+              <thead>
+                <tr>
+                  <th scope="col">时间</th>
+                  <th scope="col">用户</th>
+                  <th scope="col">触发词</th>
+                  <th scope="col">Meme key</th>
+                  <th scope="col">会话</th>
+                </tr>
+              </thead>
+              <tbody id="history-list"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

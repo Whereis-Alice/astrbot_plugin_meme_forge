@@ -12,9 +12,11 @@ from astrbot.api.star import Context, Star
 from astrbot.core import AstrBotConfig
 from astrbot.core.star import StarTools
 from astrbot.core.star.filter.event_message_type import EventMessageType
+from quart import jsonify, request
 
 from .core.arguments import strip_trigger_prefix
 from .core.collector import InputCollectionError, ParamsCollector
+from .core.dashboard import DashboardError, MemeDashboard
 from .core.engine import MemeEngine, MemeEngineError, MemeGenerationError
 from .core.extensions import ExtensionInstallError, MemeEmojiExtensionManager
 from .core.favorites import (
@@ -26,11 +28,14 @@ from .core.favorites import (
     normalize_favorites,
     remove_favorite,
 )
+from .core.grabber import MemeGrabber, MemeGrabError
+from .core.history import MemeUsageHistory
 from .utils import compress_static_image
 
 PLUGIN_ID = "astrbot_plugin_meme_forge"
 OUTPUT_INDEX_KV_KEY = "generated_meme_outputs_v1"
 FAVORITES_KV_PREFIX = "meme_favorites_v1"
+USAGE_HISTORY_KV_KEY = "meme_usage_history_v1"
 
 
 class GenerationBusyError(RuntimeError):
@@ -47,16 +52,26 @@ class MemeForgePlugin(Star):
         self.config = config
         self.collector = ParamsCollector(config)
         self.engine = MemeEngine(config)
+        self.grabber = MemeGrabber(
+            StarTools.get_data_dir(PLUGIN_ID) / "grabbed_memes",
+            self.collector,
+            config,
+        )
         self.extension = MemeEmojiExtensionManager(
             StarTools.get_data_dir(PLUGIN_ID),
             config,
         )
+        self.dashboard = MemeDashboard(self.engine, self.extension, config)
         parallel = max(1, int(self._config_value("max_parallel_generations", 2)))
         self._generation_slots = asyncio.Semaphore(parallel)
         self._resource_task: asyncio.Task[None] | None = None
         self._recent_memes: dict[str, list[tuple[str, str]]] = {}
         self._output_index = MemeOutputIndex(max_records=500)
+        self._usage_history = MemeUsageHistory(
+            max_records=self._history_limit(),
+        )
         self._storage_lock = asyncio.Lock()
+        self._register_dashboard_apis()
 
     def _config_value(self, key: str, default: Any) -> Any:
         try:
@@ -66,6 +81,154 @@ class MemeForgePlugin(Star):
                 return self.config[key]
             except (KeyError, TypeError):
                 return default
+
+    def _history_limit(self) -> int:
+        return max(100, min(int(self._config_value("history_limit", 500)), 2_000))
+
+    def _register_dashboard_apis(self) -> None:
+        apis = [
+            ("dashboard/overview", self.dashboard_overview, ["GET"], "Meme 工坊概览"),
+            ("dashboard/memes", self.dashboard_memes, ["GET"], "Meme 工坊表情列表"),
+            ("dashboard/meme", self.dashboard_meme, ["GET"], "Meme 工坊表情详情"),
+            ("dashboard/preview", self.dashboard_preview, ["GET"], "Meme 工坊表情预览"),
+            ("dashboard/materials", self.dashboard_materials, ["GET"], "Meme 工坊素材列表"),
+            ("dashboard/material", self.dashboard_material, ["GET"], "Meme 工坊素材预览"),
+            ("dashboard/history", self.dashboard_history, ["GET"], "Meme 工坊使用记录"),
+            ("dashboard/meme-enabled", self.dashboard_meme_enabled, ["POST"], "Meme 工坊表情启停"),
+        ]
+        for suffix, handler, methods, description in apis:
+            self.context.register_web_api(
+                f"/{PLUGIN_ID}/{suffix}",
+                handler,
+                methods,
+                description,
+            )
+
+    @staticmethod
+    def _dashboard_error(message: str, status: int = 400):
+        return jsonify({"ok": False, "error": message}), status
+
+    async def dashboard_overview(self):
+        """Return the compact state shown at the top of the plugin Page."""
+        try:
+            extension_status = await asyncio.to_thread(self.extension.status)
+            return jsonify(
+                {
+                    "ok": True,
+                    **self.dashboard.overview(self._usage_history, extension_status),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - Dashboard must report failures as JSON
+            logger.exception("[meme_forge] 读取 Dashboard 概览失败")
+            return self._dashboard_error(f"读取概览失败：{exc}", 500)
+
+    async def dashboard_memes(self):
+        """Return a paged, searchable list of runtime-loaded memes."""
+        try:
+            payload = self.dashboard.catalog(
+                query=request.args.get("q", ""),
+                tag=request.args.get("tag", ""),
+                status=request.args.get("status", "all"),
+                offset=request.args.get("offset", 0),
+                limit=request.args.get("limit", 60),
+            )
+            return jsonify({"ok": True, **payload})
+        except (DashboardError, TypeError, ValueError) as exc:
+            return self._dashboard_error(str(exc))
+
+    async def dashboard_meme(self):
+        """Return details and runtime argument metadata for one meme."""
+        try:
+            return jsonify(
+                {
+                    "ok": True,
+                    "item": self.dashboard.meme_detail(request.args.get("key", "")),
+                }
+            )
+        except DashboardError as exc:
+            return self._dashboard_error(str(exc), 404)
+
+    async def dashboard_preview(self):
+        """Generate a selected meme preview as a bounded data URL."""
+        try:
+            return jsonify(
+                {
+                    "ok": True,
+                    **await self.dashboard.preview(request.args.get("key", "")),
+                }
+            )
+        except DashboardError as exc:
+            return self._dashboard_error(str(exc))
+
+    async def dashboard_materials(self):
+        """Return material image names for a selected meme without local paths."""
+        try:
+            return jsonify(
+                {
+                    "ok": True,
+                    **self.dashboard.materials(request.args.get("key", "")),
+                }
+            )
+        except DashboardError as exc:
+            return self._dashboard_error(str(exc), 404)
+
+    async def dashboard_material(self):
+        """Return one validated source-material image as a bounded data URL."""
+        try:
+            return jsonify(
+                {
+                    "ok": True,
+                    **self.dashboard.material(
+                        request.args.get("key", ""),
+                        request.args.get("name", ""),
+                    ),
+                }
+            )
+        except DashboardError as exc:
+            return self._dashboard_error(str(exc), 404)
+
+    async def dashboard_history(self):
+        """Return global or selected-conversation successful generation records."""
+        try:
+            payload = self.dashboard.history(
+                self._usage_history,
+                session=request.args.get("session", "") or None,
+                limit=request.args.get("limit", 30),
+            )
+            return jsonify({"ok": True, **payload})
+        except (DashboardError, TypeError, ValueError) as exc:
+            return self._dashboard_error(str(exc))
+
+    async def dashboard_meme_enabled(self):
+        """Enable or disable one meme by stable key from the Dashboard Page."""
+        payload = await request.get_json(silent=True) or {}
+        key = str(payload.get("key", "")).strip()
+        enabled = payload.get("enabled")
+        if not key or not isinstance(enabled, bool):
+            return self._dashboard_error("需要提供 meme key 和布尔 enabled 值。")
+
+        meme = self.engine.resolve(key)
+        if meme is None:
+            return self._dashboard_error("没有找到该 meme。", 404)
+        canonical_key = str(meme.key)
+        disabled = list(self._config_value("disabled_memes", []) or [])
+        matching = {
+            value
+            for value in disabled
+            if str(value) == canonical_key
+            or self.engine.canonical_key(str(value)) == canonical_key
+        }
+        if enabled:
+            updated = [value for value in disabled if value not in matching]
+        else:
+            updated = disabled if matching else [*disabled, canonical_key]
+        try:
+            self.config["disabled_memes"] = updated
+            self.config.save_config()
+        except Exception as exc:  # noqa: BLE001 - config storage differs across installs
+            logger.exception("[meme_forge] Dashboard 保存禁用列表失败")
+            return self._dashboard_error(f"保存设置失败：{exc}", 500)
+        return jsonify({"ok": True, "item": self.dashboard.meme_summary(meme)})
 
     @staticmethod
     def _recent_history_key(event: AstrMessageEvent) -> str:
@@ -147,21 +310,41 @@ class MemeForgePlugin(Star):
         meme: Any,
         image: bytes,
         trigger: str | None = None,
+        *,
+        track_usage: bool = False,
     ) -> None:
         key = str(getattr(meme, "key", "")).strip()
         if not key:
             return
+        preferred_trigger = self._preferred_trigger(meme, trigger)
         async with self._storage_lock:
             self._output_index.remember(
                 image,
                 session=event.unified_msg_origin,
                 key=key,
-                trigger=self._preferred_trigger(meme, trigger),
+                trigger=preferred_trigger,
             )
             try:
                 await self.put_kv_data(OUTPUT_INDEX_KV_KEY, self._output_index.dump())
             except Exception as exc:  # noqa: BLE001 - storage backends vary by install
                 logger.warning("[meme_forge] 保存已生成 meme 索引失败: %s", exc)
+            if track_usage:
+                self._usage_history.max_records = self._history_limit()
+                self._usage_history.remember(
+                    key=key,
+                    trigger=preferred_trigger,
+                    platform=event.get_platform_name(),
+                    session=event.unified_msg_origin,
+                    sender_id=event.get_sender_id(),
+                    sender_name=event.get_sender_name() or event.get_sender_id(),
+                )
+                try:
+                    await self.put_kv_data(
+                        USAGE_HISTORY_KV_KEY,
+                        self._usage_history.dump(),
+                    )
+                except Exception as exc:  # noqa: BLE001 - storage backends vary by install
+                    logger.warning("[meme_forge] 保存 meme 使用记录失败: %s", exc)
 
     async def _match_quoted_meme(
         self,
@@ -228,6 +411,18 @@ class MemeForgePlugin(Star):
             self._output_index = MemeOutputIndex(records, max_records=500)
         except Exception as exc:  # noqa: BLE001 - storage backends vary by install
             logger.warning("[meme_forge] 读取已生成 meme 索引失败: %s", exc)
+        try:
+            usage_records = await self.get_kv_data(USAGE_HISTORY_KV_KEY, [])
+            self._usage_history = MemeUsageHistory(
+                usage_records,
+                max_records=self._history_limit(),
+            )
+        except Exception as exc:  # noqa: BLE001 - storage backends vary by install
+            logger.warning("[meme_forge] 读取 meme 使用记录失败: %s", exc)
+        try:
+            await self.grabber.cleanup_expired()
+        except OSError as exc:
+            logger.warning("[meme_forge] 清理过期提取文件失败: %s", exc)
         if self._config_value("check_resources_on_start", False):
             self._resource_task = asyncio.create_task(self._background_resource_check())
 
@@ -411,6 +606,21 @@ class MemeForgePlugin(Star):
         yield event.plain_result(
             f"meme_emoji 兼容扩展 {status.tag or ''} 已安装。请重启 AstrBot 后使用。"
         )
+
+    @filter.command("meme工坊提取", alias={"meme提取", "提取meme"})
+    async def extract_meme(self, event: AstrMessageEvent):
+        """将当前消息或引用消息中的图片、QQ 表情转为可保存文件。"""
+        event.stop_event()
+        try:
+            files = await self.grabber.extract(event)
+        except MemeGrabError as exc:
+            yield event.plain_result(str(exc))
+            return
+        except Exception:  # noqa: BLE001 - adapters can expose malformed payloads
+            logger.exception("[meme_forge] 提取表情失败")
+            yield event.plain_result("表情提取失败，请查看 AstrBot 日志。")
+            return
+        yield event.chain_result(self.grabber.build_components(files))
 
     @filter.command("meme工坊收藏", alias={"meme收藏"})
     async def favorite_meme(self, event: AstrMessageEvent):
@@ -608,7 +818,12 @@ class MemeForgePlugin(Star):
             yield event.plain_result("随机 meme 生成失败，请查看 AstrBot 日志。")
             return
 
-        await self._remember_generated_output(event, meme, image)
+        await self._remember_generated_output(
+            event,
+            meme,
+            image,
+            track_usage=True,
+        )
         logger.info(
             "[meme_forge] 随机 meme=%s option_keys=%s",
             meme.key,
@@ -627,6 +842,38 @@ class MemeForgePlugin(Star):
         lines = ["最近触发的 meme（从新到旧）："]
         for index, (name, key) in enumerate(history, start=1):
             lines.append(f"{index}. {name}（key: {key}）")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("meme工坊本群最近", alias={"meme群最近"})
+    async def conversation_recent_memes(self, event: AstrMessageEvent):
+        """查看当前群聊或私聊中最近成功生成的 meme。"""
+        records = self._usage_history.recent(
+            session=event.unified_msg_origin,
+            limit=10,
+        )
+        if not records:
+            yield event.plain_result("当前会话还没有成功生成记录。")
+            return
+        lines = ["当前会话最近生成的 meme："]
+        for index, record in enumerate(records, start=1):
+            lines.append(
+                f"{index}. {record.sender_name}：{record.trigger}（key: {record.key}）"
+            )
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("meme工坊全局最近", alias={"meme全局最近"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def global_recent_memes(self, event: AstrMessageEvent):
+        """查看全部会话中最近成功生成的 meme（管理员）。"""
+        records = self._usage_history.recent(limit=15)
+        if not records:
+            yield event.plain_result("还没有成功生成记录。")
+            return
+        lines = ["全局最近生成的 meme："]
+        for index, record in enumerate(records, start=1):
+            lines.append(
+                f"{index}. {record.sender_name}：{record.trigger}（{record.session}）"
+            )
         yield event.plain_result("\n".join(lines))
 
     @filter.event_message_type(EventMessageType.ALL)
@@ -682,6 +929,7 @@ class MemeForgePlugin(Star):
             match.meme,
             image,
             match.trigger,
+            track_usage=True,
         )
         logger.info(
             "[meme_forge] 触发 meme=%s trigger=%s option_keys=%s",
@@ -699,3 +947,7 @@ class MemeForgePlugin(Star):
                 await self._resource_task
         await self.collector.close()
         await self.extension.close()
+        try:
+            await self.grabber.cleanup_all()
+        except OSError as exc:
+            logger.warning("[meme_forge] 清理提取文件失败: %s", exc)

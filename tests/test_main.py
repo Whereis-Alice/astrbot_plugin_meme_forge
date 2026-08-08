@@ -48,6 +48,11 @@ class PluginSchemaTests(unittest.TestCase):
             )
         self.assertEqual(config["keyword_aliases"], [])
         self.assertEqual(config["max_favorites"], 50)
+        self.assertTrue(config["grabber_enabled"])
+        self.assertEqual(config["grabber_send_mode"], "file")
+        self.assertEqual(config["grabber_max_files"], 8)
+        self.assertEqual(config["history_limit"], 500)
+        self.assertEqual(config["dashboard_preview_max_mb"], 4)
 
 
 class RecentMemeTests(unittest.TestCase):
