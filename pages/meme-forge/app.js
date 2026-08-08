@@ -1,7 +1,26 @@
 const bridge = window.AstrBotPluginPage;
 const PAGE_SIZE = 40;
 
+const VIEW_INFO = {
+  overview: {
+    kicker: "CONTROL / OVERVIEW",
+    title: "概览",
+    description: "表情库状态与近期使用情况。",
+  },
+  library: {
+    kicker: "LIBRARY / MANAGE",
+    title: "表情库",
+    description: "浏览、筛选和管理当前已加载的 meme。",
+  },
+  history: {
+    kicker: "ACTIVITY / HISTORY",
+    title: "最近记录",
+    description: "按会话查看最近成功生成的 meme。",
+  },
+};
+
 const state = {
+  activeView: "overview",
   catalog: { items: [], total: 0, tags: [] },
   detail: null,
   overview: null,
@@ -14,6 +33,7 @@ const state = {
 };
 
 const elements = {
+  activeConversations: document.getElementById("active-conversations"),
   catalogCount: document.getElementById("catalog-count"),
   catalogMessage: document.getElementById("catalog-message"),
   detailPane: document.getElementById("detail-pane"),
@@ -26,9 +46,12 @@ const elements = {
   metricEnabled: document.getElementById("metric-enabled"),
   metricHistory: document.getElementById("metric-history"),
   metricTotal: document.getElementById("metric-total"),
+  navItems: [...document.querySelectorAll("[data-view-target]")],
   nextPage: document.getElementById("next-page"),
+  openHistoryButton: document.getElementById("open-history-button"),
   pageStatus: document.getElementById("page-status"),
   previousPage: document.getElementById("previous-page"),
+  recentActivity: document.getElementById("recent-activity"),
   refreshButton: document.getElementById("refresh-button"),
   searchInput: document.getElementById("search-input"),
   statusFilter: document.getElementById("status-filter"),
@@ -36,6 +59,11 @@ const elements = {
   themeDark: document.getElementById("theme-dark"),
   themeLight: document.getElementById("theme-light"),
   toast: document.getElementById("toast"),
+  topMemes: document.getElementById("top-memes"),
+  viewDescription: document.getElementById("view-description"),
+  viewKicker: document.getElementById("view-kicker"),
+  viewPanels: [...document.querySelectorAll("[data-view-panel]")],
+  viewTitle: document.getElementById("view-title"),
 };
 
 function createElement(tagName, className = "", text = undefined) {
@@ -149,6 +177,39 @@ function commandFor(detail) {
   return `${commandPrefix()}${trigger}${optionExamples.length ? ` ${optionExamples.join(" ")}` : ""}`;
 }
 
+function normalizedView(value) {
+  return Object.hasOwn(VIEW_INFO, value) ? value : "overview";
+}
+
+function viewFromHash() {
+  return normalizedView(window.location.hash.replace(/^#/, ""));
+}
+
+function renderViewHeader() {
+  const detail = VIEW_INFO[state.activeView];
+  elements.viewKicker.textContent = detail.kicker;
+  elements.viewTitle.textContent = detail.title;
+  elements.viewDescription.textContent = detail.description;
+  document.title = `Meme 工坊 · ${detail.title}`;
+}
+
+function setActiveView(view, { syncHash = true } = {}) {
+  const nextView = normalizedView(view);
+  state.activeView = nextView;
+  for (const item of elements.navItems) {
+    const selected = item.dataset.viewTarget === nextView;
+    item.classList.toggle("is-active", selected);
+    item.setAttribute("aria-current", selected ? "page" : "false");
+  }
+  for (const panel of elements.viewPanels) {
+    panel.hidden = panel.dataset.viewPanel !== nextView;
+  }
+  renderViewHeader();
+  if (syncHash && window.location.hash !== `#${nextView}`) {
+    window.location.hash = nextView;
+  }
+}
+
 function updateTagOptions(tags) {
   const previous = elements.tagFilter.value;
   const select = elements.tagFilter;
@@ -167,9 +228,90 @@ function createOption(value, label) {
   return option;
 }
 
+function renderSummaryEmpty(container, text) {
+  container.replaceChildren(createElement("p", "empty-summary", text));
+}
+
+function renderTopMemes(items) {
+  const list = elements.topMemes;
+  list.replaceChildren();
+  if (!items.length) {
+    renderSummaryEmpty(list, "暂无成功生成记录。");
+    return;
+  }
+  for (const [index, item] of items.entries()) {
+    const row = createElement("button", "summary-row");
+    row.type = "button";
+    row.title = `查看 ${item.key} 的详情`;
+    const rank = createElement("span", "summary-rank", String(index + 1).padStart(2, "0"));
+    const content = createElement("span", "summary-content");
+    content.append(
+      createElement("strong", "", item.key),
+      createElement("small", "", item.last_trigger || "--"),
+    );
+    const metric = createElement("span", "summary-metric", `${item.count} 次`);
+    row.append(rank, content, metric);
+    row.addEventListener("click", () => void openMeme(item.key));
+    list.append(row);
+  }
+}
+
+function renderConversations(items) {
+  const list = elements.activeConversations;
+  list.replaceChildren();
+  if (!items.length) {
+    renderSummaryEmpty(list, "暂无会话活动。");
+    return;
+  }
+  for (const item of items) {
+    const row = createElement("button", "summary-row conversation-row");
+    row.type = "button";
+    row.title = "查看此会话的最近记录";
+    const content = createElement("span", "summary-content");
+    content.append(
+      createElement("strong", "", item.last_sender_name || item.session || "--"),
+      createElement("small", "", item.session || "--"),
+    );
+    const metric = createElement("span", "summary-metric", `${item.count} 次`);
+    row.append(content, metric);
+    row.addEventListener("click", () => void openConversation(item.session));
+    list.append(row);
+  }
+}
+
+function renderRecentActivity(items) {
+  const list = elements.recentActivity;
+  list.replaceChildren();
+  if (!items.length) {
+    renderSummaryEmpty(list, "暂无成功生成记录。");
+    return;
+  }
+  for (const item of items) {
+    const row = createElement("button", "activity-row");
+    row.type = "button";
+    row.title = "查看此会话的最近记录";
+    const primary = createElement("span", "activity-primary");
+    primary.append(
+      createElement("strong", "", item.trigger || item.key || "--"),
+      createElement("small", "", `${item.sender_name || item.sender_id || "--"} · ${item.key || "--"}`),
+    );
+    const secondary = createElement("span", "activity-secondary");
+    secondary.append(
+      createElement("time", "", formatDate(item.created_at)),
+      createElement("small", "", item.session || "--"),
+    );
+    row.append(primary, secondary);
+    row.addEventListener("click", () => void openConversation(item.session));
+    list.append(row);
+  }
+}
+
 function renderOverview() {
   const data = state.overview;
   if (!data) {
+    renderTopMemes([]);
+    renderConversations([]);
+    renderRecentActivity([]);
     return;
   }
   elements.metricTotal.textContent = data.total_memes;
@@ -189,6 +331,10 @@ function renderOverview() {
       : status;
   elements.extensionState.classList.toggle("is-ready", ready);
   elements.extensionState.classList.toggle("is-warning", !ready);
+
+  renderTopMemes(data.top_memes || []);
+  renderConversations(data.active_conversations || []);
+  renderRecentActivity(data.recent_records || []);
 }
 
 function renderCatalog() {
@@ -198,8 +344,7 @@ function renderCatalog() {
   elements.catalogCount.textContent = `${total} 个`;
 
   if (!items.length) {
-    const empty = createElement("p", "region-message", "没有符合筛选条件的表情包。");
-    list.append(empty);
+    list.append(createElement("p", "region-message", "没有符合筛选条件的表情包。"));
   }
 
   for (const item of items) {
@@ -231,11 +376,11 @@ function renderCatalog() {
     });
     controls.append(toggle);
     row.append(glyph, main, controls);
-    row.addEventListener("click", () => showDetail(item.key));
+    row.addEventListener("click", () => void showDetail(item.key));
     row.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        showDetail(item.key);
+        void showDetail(item.key);
       }
     });
     list.append(row);
@@ -318,7 +463,7 @@ function renderDetail(detail) {
   meta.append(
     makeDetailBadge("图片", detail.images?.label || "0"),
     makeDetailBadge("文本", detail.texts?.label || "0"),
-    makeDetailBadge(detail.enabled ? "状态" : "状态", detail.enabled ? "已启用" : "已禁用", detail.enabled ? "is-enabled" : "is-disabled"),
+    makeDetailBadge("状态", detail.enabled ? "已启用" : "已禁用", detail.enabled ? "is-enabled" : "is-disabled"),
   );
   root.append(meta);
 
@@ -328,10 +473,10 @@ function renderDetail(detail) {
 
   const previewBlock = makeDetailBlock("预览");
   const previewFrame = createElement("div", "preview-frame");
-  previewFrame.append(createElement("span", "", "按需生成预览"));
+  previewFrame.append(createElement("span", "", "等待生成预览"));
   const previewButton = createElement("button", "preview-button", "生成预览");
   previewButton.type = "button";
-  previewButton.addEventListener("click", () => loadPreview(detail.key, previewFrame, previewButton));
+  previewButton.addEventListener("click", () => void loadPreview(detail.key, previewFrame, previewButton));
   previewBlock.append(previewFrame, previewButton);
   root.append(previewBlock);
 
@@ -383,7 +528,7 @@ function renderDetail(detail) {
         createElement("strong", "", material.name),
         createElement("small", "", formatBytes(material.size)),
       );
-      button.addEventListener("click", () => loadMaterial(detail.key, material.name, previewFrame, button));
+      button.addEventListener("click", () => void loadMaterial(detail.key, material.name, previewFrame, button));
       materialList.append(button);
     }
     materialsBlock.append(materialList);
@@ -554,6 +699,25 @@ async function showDetail(key) {
   }
 }
 
+async function openMeme(key) {
+  setActiveView("library");
+  elements.searchInput.value = key;
+  elements.tagFilter.value = "";
+  elements.statusFilter.value = "all";
+  await loadCatalog({ resetOffset: true });
+  await showDetail(key);
+}
+
+async function openConversation(session) {
+  if (!session) {
+    setActiveView("history");
+    return;
+  }
+  setActiveView("history");
+  elements.historySessionFilter.value = session;
+  await loadHistory();
+}
+
 async function toggleMeme(key, enabled, toggle) {
   toggle.disabled = true;
   try {
@@ -609,11 +773,7 @@ async function loadHistory() {
 async function refreshAll() {
   elements.refreshButton.disabled = true;
   try {
-    await Promise.all([
-      loadOverview(),
-      loadCatalog(),
-      loadHistory(),
-    ]);
+    await Promise.all([loadOverview(), loadCatalog(), loadHistory()]);
     if (state.selectedKey) {
       await showDetail(state.selectedKey);
     }
@@ -640,22 +800,27 @@ function setupEvents() {
   let searchTimer = 0;
   elements.searchInput.addEventListener("input", () => {
     window.clearTimeout(searchTimer);
-    searchTimer = window.setTimeout(() => loadCatalog({ resetOffset: true }), 220);
+    searchTimer = window.setTimeout(() => void loadCatalog({ resetOffset: true }), 220);
   });
-  elements.tagFilter.addEventListener("change", () => loadCatalog({ resetOffset: true }));
-  elements.statusFilter.addEventListener("change", () => loadCatalog({ resetOffset: true }));
+  elements.tagFilter.addEventListener("change", () => void loadCatalog({ resetOffset: true }));
+  elements.statusFilter.addEventListener("change", () => void loadCatalog({ resetOffset: true }));
   elements.previousPage.addEventListener("click", () => {
     state.offset = Math.max(0, state.offset - PAGE_SIZE);
-    loadCatalog();
+    void loadCatalog();
   });
   elements.nextPage.addEventListener("click", () => {
     state.offset += PAGE_SIZE;
-    loadCatalog();
+    void loadCatalog();
   });
-  elements.historySessionFilter.addEventListener("change", loadHistory);
-  elements.refreshButton.addEventListener("click", refreshAll);
+  elements.historySessionFilter.addEventListener("change", () => void loadHistory());
+  elements.openHistoryButton.addEventListener("click", () => setActiveView("history"));
+  elements.refreshButton.addEventListener("click", () => void refreshAll());
   elements.themeLight.addEventListener("click", () => applyTheme("light"));
   elements.themeDark.addEventListener("click", () => applyTheme("dark"));
+  for (const item of elements.navItems) {
+    item.addEventListener("click", () => setActiveView(item.dataset.viewTarget));
+  }
+  window.addEventListener("hashchange", () => setActiveView(viewFromHash(), { syncHash: false }));
 }
 
 async function boot() {
@@ -666,9 +831,14 @@ async function boot() {
   } catch {
     applyTheme("dark");
   }
+  setActiveView(viewFromHash(), { syncHash: false });
   if (!bridge) {
-    setMessage(elements.catalogMessage, "AstrBot 页面桥接未加载。", true);
-    setMessage(elements.historyMessage, "AstrBot 页面桥接未加载。", true);
+    const message = "AstrBot 页面桥接未加载。";
+    elements.extensionState.textContent = message;
+    elements.extensionState.classList.add("is-warning");
+    setMessage(elements.catalogMessage, message, true);
+    setMessage(elements.historyMessage, message, true);
+    renderOverview();
     return;
   }
   try {
@@ -676,6 +846,8 @@ async function boot() {
     await refreshAll();
   } catch (error) {
     const message = error.message || "页面初始化失败。";
+    elements.extensionState.textContent = message;
+    elements.extensionState.classList.add("is-warning");
     setMessage(elements.catalogMessage, message, true);
     setMessage(elements.historyMessage, message, true);
   }

@@ -159,6 +159,20 @@ class MemeDashboard:
             "enabled_memes": enabled,
             "disabled_memes": total - enabled,
             "usage_records": len(history.records),
+            "top_memes": history.meme_summaries(limit=5),
+            "active_conversations": history.conversation_summaries(limit=5),
+            "recent_records": [
+                {
+                    "key": record.key,
+                    "trigger": record.trigger,
+                    "platform": record.platform,
+                    "session": record.session,
+                    "sender_id": record.sender_id,
+                    "sender_name": record.sender_name,
+                    "created_at": record.created_at,
+                }
+                for record in history.recent(limit=5)
+            ],
             "extension": {
                 "installed": bool(extension_status.installed),
                 "tag": extension_status.tag,

@@ -142,6 +142,21 @@ class MemeDashboardTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("image", payload["items"][0])
         self.assertEqual(payload["conversations"][0]["count"], 1)
 
+        overview = self.dashboard.overview(
+            history,
+            SimpleNamespace(
+                installed=False,
+                tag=None,
+                library_valid=False,
+                resources_present=False,
+            ),
+        )
+        self.assertEqual(overview["top_memes"][0]["key"], "one")
+        self.assertEqual(overview["top_memes"][0]["count"], 1)
+        self.assertEqual(overview["active_conversations"][0]["session"], "qq:group:10001")
+        self.assertEqual(overview["recent_records"][0]["sender_name"], "Alice")
+        self.assertNotIn("image", overview["recent_records"][0])
+
 
 if __name__ == "__main__":
     unittest.main()

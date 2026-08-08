@@ -120,3 +120,26 @@ class MemeUsageHistory:
             else:
                 summary["count"] += 1
         return list(summaries.values())[: max(1, min(int(limit), 200))]
+
+    def meme_summaries(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Return most-used meme keys, preserving recency when counts tie."""
+
+        summaries: dict[str, dict[str, Any]] = {}
+        for record in self.records:
+            summary = summaries.get(record.key)
+            if summary is None:
+                summaries[record.key] = {
+                    "key": record.key,
+                    "count": 1,
+                    "last_used_at": record.created_at,
+                    "last_trigger": record.trigger,
+                }
+            else:
+                summary["count"] += 1
+
+        maximum = max(1, min(int(limit), 200))
+        return sorted(
+            summaries.values(),
+            key=lambda summary: int(summary["count"]),
+            reverse=True,
+        )[:maximum]

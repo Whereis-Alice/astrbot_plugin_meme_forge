@@ -9,124 +9,182 @@
   </head>
   <body>
     <div class="app-shell">
-      <header class="topbar">
+      <aside class="sidebar">
         <div class="brand">
           <div class="brand-mark" aria-hidden="true">MF</div>
-          <div>
+          <div class="brand-copy">
             <p class="eyebrow">ASTRBOT PLUGIN</p>
-            <h1>Meme 工坊</h1>
+            <strong>Meme 工坊</strong>
           </div>
         </div>
-        <div class="topbar-actions">
-          <button id="refresh-button" class="icon-button" type="button" title="刷新数据" aria-label="刷新数据">&#x21bb;</button>
+
+        <nav class="side-nav" aria-label="Meme 工坊导航">
+          <button class="nav-item" type="button" data-view-target="overview" aria-current="page">概览</button>
+          <button class="nav-item" type="button" data-view-target="library">表情库</button>
+          <button class="nav-item" type="button" data-view-target="history">最近记录</button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <button id="refresh-button" class="refresh-button" type="button" title="刷新数据" aria-label="刷新数据">
+            <span aria-hidden="true">&#x21bb;</span>
+            <span>刷新</span>
+          </button>
           <div class="theme-switch" role="group" aria-label="配色主题">
             <button id="theme-light" type="button" aria-pressed="false">浅色</button>
             <button id="theme-dark" type="button" aria-pressed="true">夜间</button>
           </div>
         </div>
-      </header>
+      </aside>
 
-      <main>
-        <section class="overview" aria-label="运行概览">
-          <div class="metric">
-            <span>已加载</span>
-            <strong id="metric-total">--</strong>
-            <small>meme</small>
+      <main class="workspace">
+        <header class="view-header">
+          <div>
+            <p id="view-kicker" class="eyebrow">CONTROL / OVERVIEW</p>
+            <h1 id="view-title">概览</h1>
+            <p id="view-description" class="view-description">表情库状态与近期使用情况。</p>
           </div>
-          <div class="metric metric-cyan">
-            <span>可用</span>
-            <strong id="metric-enabled">--</strong>
-            <small>已启用</small>
+        </header>
+
+        <section id="view-overview" class="view overview-view" data-view-panel="overview" aria-labelledby="view-title">
+          <div class="metric-grid" aria-label="运行数据">
+            <div class="metric">
+              <span>已加载</span>
+              <strong id="metric-total">--</strong>
+              <small>meme</small>
+            </div>
+            <div class="metric metric-cyan">
+              <span>可用</span>
+              <strong id="metric-enabled">--</strong>
+              <small>已启用</small>
+            </div>
+            <div class="metric metric-gold">
+              <span>已禁用</span>
+              <strong id="metric-disabled">--</strong>
+              <small>可单独恢复</small>
+            </div>
+            <div class="metric metric-violet">
+              <span>生成记录</span>
+              <strong id="metric-history">--</strong>
+              <small>不包含图片</small>
+            </div>
           </div>
-          <div class="metric metric-gold">
-            <span>已禁用</span>
-            <strong id="metric-disabled">--</strong>
-            <small>可单独恢复</small>
-          </div>
-          <div class="metric metric-violet">
-            <span>生成记录</span>
-            <strong id="metric-history">--</strong>
-            <small>不包含图片</small>
-          </div>
+
           <div id="extension-state" class="extension-state" aria-live="polite">正在读取扩展状态...</div>
-        </section>
 
-        <section class="workbench" aria-label="表情包管理">
-          <div class="catalog-pane">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">LIBRARY</p>
-                <h2>表情库</h2>
+          <div class="insight-grid">
+            <section class="insight-panel" aria-labelledby="top-memes-heading">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">MOST USED</p>
+                  <h2 id="top-memes-heading">常用表情</h2>
+                </div>
               </div>
-              <span id="catalog-count" class="count-badge">--</span>
-            </div>
+              <div id="top-memes" class="summary-list" aria-live="polite"></div>
+            </section>
 
-            <div class="filters">
-              <label class="search-field">
-                <span class="sr-only">搜索表情</span>
-                <input id="search-input" type="search" placeholder="搜索名称、关键词或标签" autocomplete="off" />
-              </label>
-              <label>
-                <span class="sr-only">标签</span>
-                <select id="tag-filter">
-                  <option value="">全部标签</option>
-                </select>
-              </label>
-              <label>
-                <span class="sr-only">启用状态</span>
-                <select id="status-filter">
-                  <option value="all">全部状态</option>
-                  <option value="enabled">仅已启用</option>
-                  <option value="disabled">仅已禁用</option>
-                </select>
-              </label>
-            </div>
+            <section class="insight-panel" aria-labelledby="conversations-heading">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">ACTIVE SESSIONS</p>
+                  <h2 id="conversations-heading">活跃会话</h2>
+                </div>
+              </div>
+              <div id="active-conversations" class="summary-list" aria-live="polite"></div>
+            </section>
 
-            <div id="catalog-message" class="region-message" aria-live="polite"></div>
-            <div id="meme-list" class="meme-list" aria-live="polite"></div>
-            <nav class="pager" aria-label="表情库分页">
-              <button id="previous-page" class="icon-button" type="button" title="上一页" aria-label="上一页">&#x2190;</button>
-              <span id="page-status">--</span>
-              <button id="next-page" class="icon-button" type="button" title="下一页" aria-label="下一页">&#x2192;</button>
-            </nav>
+            <section class="insight-panel activity-panel" aria-labelledby="activity-heading">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">LATEST ACTIVITY</p>
+                  <h2 id="activity-heading">最近活动</h2>
+                </div>
+                <button id="open-history-button" class="text-button" type="button">全部记录</button>
+              </div>
+              <div id="recent-activity" class="activity-list" aria-live="polite"></div>
+            </section>
           </div>
-
-          <aside id="detail-pane" class="detail-pane" aria-label="表情详情">
-            <div class="detail-empty">
-              <p class="eyebrow">INSPECT</p>
-              <h2>选择一个表情</h2>
-            </div>
-          </aside>
         </section>
 
-        <section class="history-section" aria-label="最近生成记录">
-          <div class="section-heading history-heading">
-            <div>
-              <p class="eyebrow">RECENT ACTIVITY</p>
-              <h2>最近生成</h2>
+        <section id="view-library" class="view library-view" data-view-panel="library" aria-label="表情库" hidden>
+          <div class="workbench">
+            <section class="catalog-pane" aria-labelledby="catalog-heading">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">LIBRARY</p>
+                  <h2 id="catalog-heading">表情库</h2>
+                </div>
+                <span id="catalog-count" class="count-badge">--</span>
+              </div>
+
+              <div class="filters">
+                <label class="search-field">
+                  <span class="sr-only">搜索表情</span>
+                  <input id="search-input" type="search" placeholder="搜索名称、关键词或标签" autocomplete="off" />
+                </label>
+                <label>
+                  <span class="sr-only">标签</span>
+                  <select id="tag-filter">
+                    <option value="">全部标签</option>
+                  </select>
+                </label>
+                <label>
+                  <span class="sr-only">启用状态</span>
+                  <select id="status-filter">
+                    <option value="all">全部状态</option>
+                    <option value="enabled">仅已启用</option>
+                    <option value="disabled">仅已禁用</option>
+                  </select>
+                </label>
+              </div>
+
+              <div id="catalog-message" class="region-message" aria-live="polite"></div>
+              <div id="meme-list" class="meme-list" aria-live="polite"></div>
+              <nav class="pager" aria-label="表情库分页">
+                <button id="previous-page" class="icon-button" type="button" title="上一页" aria-label="上一页">&#x2190;</button>
+                <span id="page-status">--</span>
+                <button id="next-page" class="icon-button" type="button" title="下一页" aria-label="下一页">&#x2192;</button>
+              </nav>
+            </section>
+
+            <aside id="detail-pane" class="detail-pane" aria-label="表情详情">
+              <div class="detail-empty">
+                <p class="eyebrow">INSPECT</p>
+                <h2>未选择表情</h2>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="view-history" class="view history-view" data-view-panel="history" aria-label="最近记录" hidden>
+          <section class="history-section" aria-labelledby="history-heading">
+            <div class="section-heading history-heading">
+              <div>
+                <p class="eyebrow">RECENT ACTIVITY</p>
+                <h2 id="history-heading">最近生成</h2>
+              </div>
+              <label class="history-scope">
+                <span class="sr-only">会话范围</span>
+                <select id="history-session-filter">
+                  <option value="">全部会话</option>
+                </select>
+              </label>
             </div>
-            <label class="history-scope">
-              <span class="sr-only">会话范围</span>
-              <select id="history-session-filter">
-                <option value="">全部会话</option>
-              </select>
-            </label>
-          </div>
-          <div id="history-message" class="region-message" aria-live="polite"></div>
-          <div class="history-table-wrap">
-            <table class="history-table">
-              <thead>
-                <tr>
-                  <th scope="col">时间</th>
-                  <th scope="col">用户</th>
-                  <th scope="col">触发词</th>
-                  <th scope="col">Meme key</th>
-                  <th scope="col">会话</th>
-                </tr>
-              </thead>
-              <tbody id="history-list"></tbody>
-            </table>
-          </div>
+            <div id="history-message" class="region-message" aria-live="polite"></div>
+            <div class="history-table-wrap">
+              <table class="history-table">
+                <thead>
+                  <tr>
+                    <th scope="col">时间</th>
+                    <th scope="col">用户</th>
+                    <th scope="col">触发词</th>
+                    <th scope="col">Meme key</th>
+                    <th scope="col">会话</th>
+                  </tr>
+                </thead>
+                <tbody id="history-list"></tbody>
+              </table>
+            </div>
+          </section>
         </section>
       </main>
     </div>

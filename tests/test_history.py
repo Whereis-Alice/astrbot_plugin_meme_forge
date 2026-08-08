@@ -51,6 +51,51 @@ class MemeUsageHistoryTests(unittest.TestCase):
         restored = MemeUsageHistory(history.dump(), max_records=3)
         self.assertEqual([record.key for record in restored.records], ["three", "two", "one"])
 
+    def test_meme_summaries_rank_by_usage_and_keep_latest_tie_first(self) -> None:
+        history = MemeUsageHistory(max_records=10)
+        history.remember(
+            key="alpha",
+            trigger="甲旧",
+            platform="qq",
+            session="qq:group:100",
+            sender_id="alice",
+            sender_name="Alice",
+            created_at="2026-08-08T00:00:00+00:00",
+        )
+        history.remember(
+            key="beta",
+            trigger="乙",
+            platform="qq",
+            session="qq:group:100",
+            sender_id="bob",
+            sender_name="Bob",
+            created_at="2026-08-08T00:01:00+00:00",
+        )
+        history.remember(
+            key="alpha",
+            trigger="甲新",
+            platform="qq",
+            session="qq:private:alice",
+            sender_id="alice",
+            sender_name="Alice",
+            created_at="2026-08-08T00:02:00+00:00",
+        )
+        history.remember(
+            key="gamma",
+            trigger="丙",
+            platform="qq",
+            session="qq:private:bob",
+            sender_id="bob",
+            sender_name="Bob",
+            created_at="2026-08-08T00:03:00+00:00",
+        )
+
+        summaries = history.meme_summaries()
+        self.assertEqual([item["key"] for item in summaries], ["alpha", "gamma", "beta"])
+        self.assertEqual(summaries[0]["count"], 2)
+        self.assertEqual(summaries[0]["last_trigger"], "甲新")
+        self.assertEqual(summaries[0]["last_used_at"], "2026-08-08T00:02:00+00:00")
+
     def test_discards_malformed_records_and_bounds_history(self) -> None:
         history = MemeUsageHistory([{"key": "invalid"}], max_records=20)
         self.assertEqual(history.records, [])
