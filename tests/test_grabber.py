@@ -67,6 +67,26 @@ class FakeEvent:
 
 
 class MemeGrabberTests(unittest.IsolatedAsyncioTestCase):
+    async def test_command_send_mode_overrides_static_delivery_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            grabber = MemeGrabber(Path(directory), FakeCollector(), {"grabber_send_mode": "file"})
+            png_files = await grabber.extract(FakeEvent([Image(PNG_BYTES)]))
+            gif_files = await grabber.extract(FakeEvent([Image(GIF_BYTES)]))
+
+            self.assertEqual(MemeGrabber.command_send_mode("图片"), "image")
+            self.assertEqual(MemeGrabber.command_send_mode("IMAGE"), "image")
+            self.assertEqual(MemeGrabber.command_send_mode("文件"), "file")
+            self.assertIsNone(MemeGrabber.command_send_mode("压缩"))
+            self.assertEqual(type(grabber.build_components(png_files)[0]).__name__, "File")
+            self.assertEqual(
+                type(grabber.build_components(png_files, send_mode="image")[0]).__name__,
+                "Image",
+            )
+            self.assertEqual(
+                type(grabber.build_components(gif_files, send_mode="image")[0]).__name__,
+                "File",
+            )
+
     async def test_extracts_reply_image_and_preserves_gif_as_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             grabber = MemeGrabber(Path(directory), FakeCollector(), {})

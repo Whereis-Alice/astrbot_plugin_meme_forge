@@ -32,6 +32,12 @@ class ExtractedMemeFile:
 class MemeGrabber:
     """Extract images from a message without depending on a platform event class."""
 
+    _SEND_MODE_ALIASES: ClassVar[dict[str, str]] = {
+        "图片": "image",
+        "image": "image",
+        "文件": "file",
+        "file": "file",
+    }
     _IMAGE_SUFFIXES: ClassVar[set[str]] = {
         ".apng",
         ".bmp",
@@ -252,11 +258,27 @@ class MemeGrabber:
             animated=animated,
         )
 
-    def build_components(self, files: list[ExtractedMemeFile]) -> list[Any]:
-        send_mode = str(self._config_value("grabber_send_mode", "file")).casefold()
+    @classmethod
+    def command_send_mode(cls, value: str | None) -> str | None:
+        """Map a user-facing extraction mode to the internal send mode."""
+
+        normalized = str(value or "").strip().casefold()
+        if not normalized:
+            return None
+        return cls._SEND_MODE_ALIASES.get(normalized)
+
+    def build_components(
+        self,
+        files: list[ExtractedMemeFile],
+        *,
+        send_mode: str | None = None,
+    ) -> list[Any]:
+        selected_mode = send_mode or str(
+            self._config_value("grabber_send_mode", "file")
+        ).casefold()
         components: list[Any] = []
         for item in files:
-            if send_mode == "image" and not item.animated:
+            if selected_mode == "image" and not item.animated:
                 components.append(Comp.Image.fromFileSystem(str(item.path)))
             else:
                 components.append(Comp.File(file=str(item.path), name=item.filename))

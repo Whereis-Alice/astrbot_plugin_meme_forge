@@ -139,7 +139,7 @@
   },
   "grabber_send_mode": {
     "description": "提取结果发送方式",
-    "hint": "动画表情始终作为文件发送，以避免部分平台丢失动画帧。",
+    "hint": "默认发送方式；单次可在 /meme提取 后附“图片”或“文件”覆盖。动画表情始终作为文件发送，以避免部分平台丢失动画帧。",
     "type": "string",
     "options": ["file", "image"],
     "default": "file"

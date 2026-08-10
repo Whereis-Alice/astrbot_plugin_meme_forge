@@ -608,9 +608,21 @@ class MemeForgePlugin(Star):
         )
 
     @filter.command("meme工坊提取", alias={"meme提取", "提取meme"})
-    async def extract_meme(self, event: AstrMessageEvent):
-        """将当前消息或引用消息中的图片、QQ 表情转为可保存文件。"""
+    async def extract_meme(
+        self,
+        event: AstrMessageEvent,
+        send_mode: str | None = None,
+    ):
+        """Extract message images, optionally forcing image or file delivery."""
         event.stop_event()
+        mode_text = str(send_mode or "").strip()
+        selected_mode = self.grabber.command_send_mode(mode_text)
+        if mode_text and selected_mode is None:
+            yield event.plain_result(
+                "提取模式只支持“图片”或“文件”。\n"
+                "例如：/meme提取 图片 或 /meme提取 文件"
+            )
+            return
         try:
             files = await self.grabber.extract(event)
         except MemeGrabError as exc:
@@ -620,7 +632,9 @@ class MemeForgePlugin(Star):
             logger.exception("[meme_forge] 提取表情失败")
             yield event.plain_result("表情提取失败，请查看 AstrBot 日志。")
             return
-        yield event.chain_result(self.grabber.build_components(files))
+        yield event.chain_result(
+            self.grabber.build_components(files, send_mode=selected_mode)
+        )
 
     @filter.command("meme工坊收藏", alias={"meme收藏"})
     async def favorite_meme(self, event: AstrMessageEvent):
