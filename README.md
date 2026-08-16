@@ -11,6 +11,7 @@ Meme 工坊是面向 AstrBot 4.x 的本地 meme 表情包生成插件。它使�
 
 - 自动读取运行时 meme 元数据，支持自然别名、`key=value` 和命令行风格参数。
 - 正确传递单个 meme 的选项，例如 `/meme 奶茶 左手`、`/meme 奶茶 position=left`。
+- 支持 QQ OneBot 与 QQ 官方 Bot 的头像输入；官方 Bot 使用应用范围内的 `openid`，并兼容常见 At 文本格式。
 - 从所有已加载且未禁用的 meme 中随机生成，安装扩展后的 meme 也会参与随机。
 - 按“平台 + 用户 ID”独立、跨重启保存的个人收藏夹。
 - 引用当前或历史消息，提取普通图片和 QQ OneBot 可访问的表情为可保存文件。
@@ -63,6 +64,7 @@ apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0
 /meme 奶茶 --position both
 /meme 对称 上
 /meme 喜报 "今天放假"
+/meme 摸 @114514
 ```
 
 若希望使用 `/奶茶 左手` 这样的直接关键词形式，可将 `trigger_prefix` 设为空。
@@ -79,6 +81,7 @@ apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0
 | 长选项 | `/meme 奶茶 --position both` | 命令行风格写法 |
 | 布尔开关 | `/meme 对称 --top` | 也支持 `--top=false`、`--no-top` |
 | 带空格文本 | `/meme 喜报 "今天 放假"` | 引号内作为同一段文本 |
+| 用户头像 | `/meme 摸 @114514` | OneBot 可使用 QQ 号；QQ 官方 Bot 也识别消息链 At、`<@openid>` 和 `<@!openid>` |
 
 查看某个 meme 可用的图片数、文字数和选项：
 
@@ -207,6 +210,7 @@ apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0
 | `compress_output` | `true` | 是否压缩过大的静态图 |
 | `max_output_size` | `512` | 静态输出图最大边长 |
 | `max_input_image_mb` | `20` | 单张输入图片大小上限（MB） |
+| `avatar_cache_size` | `20` | 最近头像的内存缓存数量；设为 `0` 关闭，重载后清空 |
 
 ### 资源、扩展与 Dashboard
 
@@ -235,8 +239,9 @@ apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0
 - 收藏和输出索引不保存图片内容；输出索引只存图片指纹、会话、meme key 和触发词。
 - 最近生成记录只保存 meme key、触发词、平台、会话、发送者 ID/名称和时间；数量受 `history_limit` 限制。
 - `/meme工坊最近` 只保留当前插件运行期间每位用户最近的 3 个不同 meme；它不是持久记录。
+- QQ 与 QQ 官方 Bot 头像缓存只保存在插件进程内存中，不写入插件数据目录，插件重载或关闭时会清空。
 - Dashboard 中的全局和会话记录面向拥有 AstrBot Dashboard 权限的管理员，请按部署环境的隐私要求配置权限。
-- 生成资源和扩展安装会访问上游 GitHub/CDN；用户图片下载只接受 HTTP/HTTPS，并受超时和大小限制。
+- 生成资源和扩展安装会访问上游 GitHub/CDN；网络图片和头像会访问其原始地址或腾讯头像 CDN，并受协议、超时和大小限制。
 
 ## 常见问题
 
@@ -256,6 +261,10 @@ apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0
 
 素材只在本机已下载的 `$MEME_HOME/resources/images/<meme key>` 中显示。未下载资源、该 meme 没有素材目录，或图片超过 `dashboard_preview_max_mb` 时，页面不会显示可查看的素材。
 
+### QQ 官方 Bot 没有自动带入头像
+
+确认使用的是 AstrBot 的 `qq_official` 或 `qq_official_webhook` 适配器，并且平台配置中存在有效 `appid`。QQ 官方 Bot 的用户标识是应用范围内的 `openid`，不能按普通 QQ 号互换；腾讯头像 CDN 不可用时，插件会保留其他已提供的图片或返回该 meme 的正常参数不足提示，不会伪造用户 ID。
+
 ## 许可证
 
 本项目派生自 AGPL-3.0-or-later 上游，代码继续使用
@@ -263,7 +272,7 @@ apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0
 
 ## 致谢
 
-- [`Zhalslar/astrbot_plugin_memelite`](https://github.com/Zhalslar/astrbot_plugin_memelite)：AstrBot 对接、消息输入、参数收集和管理思路的上游参考。
+- [`Zhalslar/astrbot_plugin_memelite`](https://github.com/Zhalslar/astrbot_plugin_memelite)：AstrBot 对接、消息输入、参数收集和管理思路的上游参考；v1.5.0 继续参考其头像缓存与 QQ 官方 Bot 适配，并按本项目的下载安全边界重新实现。
 - [`XTsat/astrbot_plugin_meme_grabber`](https://github.com/XTsat/astrbot_plugin_meme_grabber)：表情提取交互和 QQ OneBot 回退处理的上游参考；其公开 issue 在本次整合时为 0。
 - [`anyliew/meme_emoji`](https://github.com/anyliew/meme_emoji) 与 [`anyliew/meme-emoji`](https://github.com/anyliew/meme-emoji)：扩展表情和 Rust 兼容实现来源。
 - [`MemeCrafters/meme-generator-rs`](https://github.com/MemeCrafters/meme-generator-rs)：实际使用的 meme 生成引擎。

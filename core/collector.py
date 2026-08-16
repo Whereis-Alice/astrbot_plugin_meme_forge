@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 from urllib.request import url2pathname
 
 import aiohttp
@@ -22,6 +23,9 @@ from .arguments import (
 )
 from .engine import MemeInputs
 
+QQ_OFFICIAL_PLATFORMS = frozenset({"qq_official", "qq_official_webhook"})
+AVATAR_DOWNLOAD_LIMIT = 2 * 1024 * 1024
+
 
 class InputCollectionError(RuntimeError):
     pass
@@ -31,13 +35,14 @@ class InputCollectionError(RuntimeError):
 class _MessageMedia:
     images: list[tuple[str, bytes]]
     reply_texts: list[str]
-    mentioned_ids: list[str]
+    mentioned_targets: list[tuple[str, str | None]]
 
 
 class ParamsCollector:
     def __init__(self, config: Any):
         self.config = config
         self._session: aiohttp.ClientSession | None = None
+        self._avatar_cache: OrderedDict[str, bytes] = OrderedDict()
 
     def _config_value(self, key: str, default: Any) -> Any:
         try:
@@ -53,36 +58,46 @@ class ParamsCollector:
         megabytes = max(1, int(self._config_value("max_input_image_mb", 20)))
         return megabytes * 1024 * 1024
 
+    @property
+    def avatar_cache_size(self) -> int:
+        return max(0, min(int(self._config_value("avatar_cache_size", 20)), 256))
+
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=30, connect=10, sock_read=20)
             self._session = aiohttp.ClientSession(timeout=timeout, trust_env=True)
         return self._session
 
-    async def _download_image(self, url: str) -> bytes:
+    async def _download_image(
+        self,
+        url: str,
+        *,
+        max_bytes: int | None = None,
+    ) -> bytes:
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"}:
             raise InputCollectionError(
                 f"不支持的图片地址协议: {parsed.scheme or 'unknown'}"
             )
 
+        size_limit = self.max_input_bytes
+        if max_bytes is not None:
+            size_limit = min(size_limit, max(1, max_bytes))
+
         session = await self._get_session()
         async with session.get(url, allow_redirects=True) as response:
             response.raise_for_status()
-            if (
-                response.content_length
-                and response.content_length > self.max_input_bytes
-            ):
+            if response.content_length and response.content_length > size_limit:
                 raise InputCollectionError(
-                    f"输入图片超过 {self.max_input_bytes // 1024 // 1024} MB 限制"
+                    f"输入图片超过 {size_limit // 1024 // 1024} MB 限制"
                 )
             chunks: list[bytes] = []
             size = 0
             async for chunk in response.content.iter_chunked(64 * 1024):
                 size += len(chunk)
-                if size > self.max_input_bytes:
+                if size > size_limit:
                     raise InputCollectionError(
-                        f"输入图片超过 {self.max_input_bytes // 1024 // 1024} MB 限制"
+                        f"输入图片超过 {size_limit // 1024 // 1024} MB 限制"
                     )
                 chunks.append(chunk)
             return b"".join(chunks)
@@ -125,15 +140,106 @@ class ParamsCollector:
             )
         return await asyncio.to_thread(path.read_bytes)
 
+    def _cached_avatar(self, key: str) -> bytes | None:
+        capacity = self.avatar_cache_size
+        if capacity == 0:
+            self._avatar_cache.clear()
+            return None
+        while len(self._avatar_cache) > capacity:
+            self._avatar_cache.popitem(last=False)
+        avatar = self._avatar_cache.get(key)
+        if avatar is None:
+            return None
+        self._avatar_cache.move_to_end(key)
+        return avatar
+
+    def _remember_avatar(self, key: str, avatar: bytes) -> None:
+        capacity = self.avatar_cache_size
+        if capacity == 0:
+            return
+        self._avatar_cache[key] = avatar
+        self._avatar_cache.move_to_end(key)
+        while len(self._avatar_cache) > capacity:
+            self._avatar_cache.popitem(last=False)
+
+    async def _get_cached_avatar(
+        self,
+        cache_key: str,
+        url: str,
+        description: str,
+    ) -> bytes | None:
+        if avatar := self._cached_avatar(cache_key):
+            return avatar
+        try:
+            avatar = await self._download_image(
+                url,
+                max_bytes=AVATAR_DOWNLOAD_LIMIT,
+            )
+        except (aiohttp.ClientError, InputCollectionError, asyncio.TimeoutError) as exc:
+            logger.warning("[meme_forge] 获取 %s 头像失败: %s", description, exc)
+            return None
+        if avatar:
+            self._remember_avatar(cache_key, avatar)
+        return avatar or None
+
     async def get_avatar(self, user_id: str) -> bytes | None:
+        """Return a cached classic QQ avatar for a numeric QQ identifier."""
         if not user_id.isdigit():
             return None
-        url = f"https://q4.qlogo.cn/headimg_dl?dst_uin={user_id}&spec=640"
-        try:
-            return await self._download_image(url)
-        except (aiohttp.ClientError, InputCollectionError, asyncio.TimeoutError) as exc:
-            logger.warning("[meme_forge] 获取 QQ 头像 %s 失败: %s", user_id, exc)
+        encoded_id = quote(user_id, safe="")
+        return await self._get_cached_avatar(
+            f"qq:{user_id}",
+            f"https://q4.qlogo.cn/headimg_dl?dst_uin={encoded_id}&spec=640",
+            f"QQ 用户 {user_id}",
+        )
+
+    async def get_qq_official_avatar(
+        self,
+        appid: str,
+        openid: str,
+    ) -> bytes | None:
+        """Return an app-scoped QQ Official Bot avatar for an opaque openid."""
+        appid = str(appid).strip()
+        openid = str(openid).strip()
+        if not appid or not openid:
             return None
+        return await self._get_cached_avatar(
+            f"qq_official:{appid}:{openid}",
+            "https://q.qlogo.cn/qqapp/"
+            f"{quote(appid, safe='')}/{quote(openid, safe='')}/0",
+            f"QQ 官方用户 {openid}",
+        )
+
+    @staticmethod
+    def _qq_official_appid(event: AstrMessageEvent) -> str:
+        platform = getattr(getattr(event, "bot", None), "platform", None)
+        appid = getattr(platform, "appid", None)
+        if appid:
+            return str(appid).strip()
+        config = getattr(platform, "config", None)
+        if isinstance(config, dict):
+            return str(config.get("appid") or "").strip()
+        return ""
+
+    async def _get_event_avatar(
+        self,
+        event: AstrMessageEvent,
+        target_id: str,
+        *,
+        explicit_qq: bool,
+    ) -> bytes | None:
+        platform_name = str(event.get_platform_name())
+        if platform_name in QQ_OFFICIAL_PLATFORMS:
+            appid = self._qq_official_appid(event)
+            if appid:
+                avatar = await self.get_qq_official_avatar(appid, target_id)
+                if avatar:
+                    return avatar
+            if not explicit_qq:
+                return None
+        if explicit_qq or platform_name == "aiocqhttp":
+            return await self.get_avatar(target_id)
+        return None
 
     async def _get_user_info(
         self,
@@ -201,7 +307,7 @@ class ParamsCollector:
     ) -> _MessageMedia:
         images: list[tuple[str, bytes]] = []
         reply_texts: list[str] = []
-        mentioned_ids: list[str] = []
+        mentioned_targets: dict[str, str | None] = {}
         chain = list(event.get_messages() or [])
         sender_name = str(event.get_sender_name() or event.get_sender_id())
 
@@ -248,12 +354,17 @@ class ParamsCollector:
             elif isinstance(segment, Comp.At):
                 target_id = self._component_user_id(segment)
                 if target_id and target_id != self_id:
-                    mentioned_ids.append(target_id)
+                    target_name = str(getattr(segment, "name", None) or "").strip()
+                    previous_name = mentioned_targets.get(target_id)
+                    if target_id not in mentioned_targets or (
+                        not previous_name and target_name
+                    ):
+                        mentioned_targets[target_id] = target_name or None
 
         return _MessageMedia(
             images=images,
             reply_texts=reply_texts,
-            mentioned_ids=list(dict.fromkeys(mentioned_ids)),
+            mentioned_targets=list(mentioned_targets.items()),
         )
 
     async def _append_target(
@@ -265,17 +376,18 @@ class ParamsCollector:
         *,
         explicit_qq: bool,
         image_name_override: str | None,
+        target_name: str | None = None,
     ) -> None:
         user_info = await self._get_user_info(event, target_id)
-        nickname = user_info[0] if user_info else target_id
+        nickname = user_info[0] if user_info else target_name or target_id
         if user_info:
             options.setdefault("name", nickname)
             if user_info[1]:
                 options.setdefault("gender", user_info[1])
-        avatar = (
-            await self.get_avatar(target_id)
-            if explicit_qq or event.get_platform_name() == "aiocqhttp"
-            else None
+        avatar = await self._get_event_avatar(
+            event,
+            target_id,
+            explicit_qq=explicit_qq,
         )
         if avatar:
             images.append((image_name_override or nickname, avatar))
@@ -300,6 +412,15 @@ class ParamsCollector:
                 )
         parser = MemeArgumentParser(specs)
         parsed = parser.parse(argument_text)
+        if event.get_platform_name() in QQ_OFFICIAL_PLATFORMS:
+            remaining_texts: list[str] = []
+            for text in parsed.texts:
+                if text.startswith("@") and len(text) > 1:
+                    parsed.target_ids.append(text[1:])
+                else:
+                    remaining_texts.append(text)
+            parsed.texts = remaining_texts
+            parsed.target_ids = list(dict.fromkeys(parsed.target_ids))
         if parsed.errors:
             raise InputCollectionError("；".join(parsed.errors))
 
@@ -309,7 +430,7 @@ class ParamsCollector:
         images = media.images
 
         collected_targets: set[str] = set()
-        for target_id in media.mentioned_ids:
+        for target_id, target_name in media.mentioned_targets:
             collected_targets.add(target_id)
             await self._append_target(
                 event,
@@ -318,6 +439,7 @@ class ParamsCollector:
                 options,
                 explicit_qq=False,
                 image_name_override=image_name_override,
+                target_name=target_name,
             )
         for target_id in parsed.target_ids:
             if target_id in collected_targets:
@@ -335,15 +457,22 @@ class ParamsCollector:
         sender_id = str(event.get_sender_id())
         sender_name = str(event.get_sender_name() or sender_id)
         self_id = str(event.get_self_id())
-        can_use_qq_fallback = event.get_platform_name() == "aiocqhttp"
+        platform_name = str(event.get_platform_name())
+        can_use_avatar_fallback = (
+            platform_name == "aiocqhttp" or platform_name in QQ_OFFICIAL_PLATFORMS
+        )
+        if can_use_avatar_fallback and len(images) < params.min_images:
+            await self._append_target(
+                event,
+                sender_id,
+                images,
+                options,
+                explicit_qq=False,
+                image_name_override=image_name_override,
+                target_name=sender_name,
+            )
         if (
-            can_use_qq_fallback
-            and len(images) < params.min_images
-            and (avatar := await self.get_avatar(sender_id))
-        ):
-            images.append((image_name_override or sender_name, avatar))
-        if (
-            can_use_qq_fallback
+            platform_name == "aiocqhttp"
             and len(images) < params.min_images
             and (avatar := await self.get_avatar(self_id))
         ):
@@ -366,3 +495,4 @@ class ParamsCollector:
     async def close(self) -> None:
         if self._session is not None and not self._session.closed:
             await self._session.close()
+        self._avatar_cache.clear()

@@ -7,6 +7,8 @@
 - License: GNU Affero General Public License v3.0 or later
 
 Meme 工坊派生并重构了该项目的 AstrBot 对接、参数收集和 meme 管理思路。
+v1.5.0 进一步参考其 v3.0.4/v3.0.5 的头像缓存和 QQ 官方 Bot 适配，
+但使用本项目已有的 HTTPS、超时、响应大小限制和平台无关消息模型重新实现。
 本仓库的 `LICENSE` 保留相同的 AGPL-3.0-or-later 许可条件。
 
 ## meme_emoji

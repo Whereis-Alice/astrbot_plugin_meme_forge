@@ -104,6 +104,17 @@
     },
     "default": 20
   },
+  "avatar_cache_size": {
+    "description": "头像内存缓存数量",
+    "hint": "缓存 QQ 和 QQ 官方 Bot 头像以减少重复下载；只保存在内存中，重载插件后清空。设为 0 可关闭。",
+    "type": "int",
+    "slider": {
+      "min": 0,
+      "max": 256,
+      "step": 1
+    },
+    "default": 20
+  },
   "check_resources_on_start": {
     "description": "启动时后台检查内置资源",
     "hint": "默认关闭以避免启动阶段长时间等待；可手动执行 /meme工坊资源检查。",

@@ -105,6 +105,12 @@ class MemeArgumentParserTests(unittest.TestCase):
         self.assertEqual(parsed.texts, ["今天 放假"])
         self.assertEqual(parsed.target_ids, ["114514"])
 
+    def test_qq_official_bracket_mentions_accept_opaque_openids(self) -> None:
+        parser = bubble_tea_parser()
+        parsed = parser.parse("<@openid-a> <@!openid-b>")
+        self.assertEqual(parsed.target_ids, ["openid-a", "openid-b"])
+        self.assertEqual(parsed.texts, [])
+
     def test_invalid_range_and_unknown_option_are_reported(self) -> None:
         parser = MemeArgumentParser(
             option_specs_from_params(Params([IntegerOption("count", 1, 3)]))

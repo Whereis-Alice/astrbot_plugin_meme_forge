@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shlex
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -195,6 +196,12 @@ class MemeArgumentParser:
 
         while index < len(tokens):
             token = tokens[index]
+
+            bracket_mention = re.fullmatch(r"<@!?([^<>\s]+)>", token)
+            if bracket_mention:
+                result.target_ids.append(bracket_mention.group(1))
+                index += 1
+                continue
 
             if token.startswith("@") and token[1:].isdigit():
                 result.target_ids.append(token[1:])
