@@ -30,6 +30,12 @@ from .core.favorites import (
 )
 from .core.grabber import MemeGrabber, MemeGrabError
 from .core.history import MemeUsageHistory
+from .core.updates import (
+    SUPPORTED_RANGE_TEXT,
+    compare_engine_versions,
+    fetch_latest_compatible_meme_generator,
+    format_check_error,
+)
 from .utils import compress_static_image
 
 PLUGIN_ID = "astrbot_plugin_meme_forge"
@@ -574,6 +580,112 @@ class MemeForgePlugin(Star):
         ]
         if status.installed:
             lines.append("更新或首次安装后需要重启 AstrBot 才会加载动态库。")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("meme工坊更新检查", alias={"meme更新检查"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def check_updates(self, event: AstrMessageEvent):
+        """Check compatible engine and meme_emoji releases without installing."""
+        engine_task = asyncio.create_task(
+            asyncio.wait_for(fetch_latest_compatible_meme_generator(), timeout=20)
+        )
+        extension_task = asyncio.create_task(
+            asyncio.wait_for(self.extension.latest_release(), timeout=20)
+        )
+        status_task = asyncio.create_task(
+            asyncio.wait_for(asyncio.to_thread(self.extension.status), timeout=20)
+        )
+        latest_engine, latest_extension, extension_status = await asyncio.gather(
+            engine_task,
+            extension_task,
+            status_task,
+            return_exceptions=True,
+        )
+        for result in (latest_engine, latest_extension, extension_status):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+
+        current_engine = self.engine.version
+        lines = ["Meme 工坊更新检查", "", "内置 meme_generator："]
+        if isinstance(latest_engine, BaseException):
+            logger.warning("[meme_forge] 检查 meme_generator 更新失败: %s", latest_engine)
+            engine_error = format_check_error(latest_engine)
+            lines.extend(
+                [
+                    f"- 当前版本：{current_engine}",
+                    f"- 最新版本：检查失败（{engine_error}）",
+                    f"- 兼容范围：{SUPPORTED_RANGE_TEXT}",
+                ]
+            )
+        else:
+            engine_state = compare_engine_versions(current_engine, latest_engine)
+            state_text = {
+                "current": "已是最新兼容版本",
+                "update_available": "有兼容更新可用",
+                "newer": "当前版本高于 PyPI 最新兼容版本",
+                "unknown": "版本格式无法比较",
+            }[engine_state]
+            lines.extend(
+                [
+                    f"- 当前版本：{current_engine}",
+                    f"- 最新兼容版本：{latest_engine}",
+                    f"- 状态：{state_text}",
+                    f"- 兼容范围：{SUPPORTED_RANGE_TEXT}",
+                ]
+            )
+
+        lines.extend(["", "meme_emoji 扩展："])
+        if isinstance(extension_status, BaseException):
+            logger.warning("[meme_forge] 读取扩展状态失败: %s", extension_status)
+            current_extension = "状态读取失败"
+            status_available = False
+            installed = False
+            healthy = False
+        else:
+            current_extension = extension_status.tag or "未安装"
+            status_available = True
+            installed = extension_status.installed
+            healthy = all(
+                (
+                    extension_status.library_valid,
+                    extension_status.license_present,
+                    extension_status.resources_present,
+                    extension_status.external_loading_enabled,
+                )
+            )
+
+        lines.append(f"- 当前版本：{current_extension}")
+        if isinstance(latest_extension, BaseException):
+            logger.warning("[meme_forge] 检查 meme_emoji 更新失败: %s", latest_extension)
+            extension_error = format_check_error(latest_extension)
+            lines.append(f"- 最新版本：检查失败（{extension_error}）")
+        else:
+            lines.append(f"- 最新版本：{latest_extension.tag}")
+            if not status_available:
+                extension_state = "无法判断本地安装状态"
+            elif not installed:
+                extension_state = "尚未安装"
+            elif current_extension != latest_extension.tag:
+                extension_state = "有更新可用"
+            elif not healthy:
+                extension_state = "版本最新，但本地安装不完整或校验未通过"
+            else:
+                extension_state = "已是最新版本，且本地校验通过"
+            lines.append(f"- 状态：{extension_state}")
+
+        lines.extend(
+            [
+                "",
+                "内置素材：只读检查无法逐项判断；需要时执行 /meme工坊资源检查。",
+                "本命令只检查，不会下载或安装任何更新。",
+            ]
+        )
+        if not isinstance(latest_extension, BaseException) and (
+            not installed or current_extension != latest_extension.tag or not healthy
+        ):
+            lines.append(
+                "扩展可执行 /meme工坊扩展更新 确认，完成后重启 AstrBot。"
+            )
         yield event.plain_result("\n".join(lines))
 
     @filter.command("meme工坊扩展安装", alias={"meme工坊扩展更新"})
