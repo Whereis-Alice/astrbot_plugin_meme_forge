@@ -320,17 +320,23 @@ function renderOverview() {
   elements.metricHistory.textContent = data.usage_records;
 
   const extension = data.extension || {};
-  const status = extension.installed
+  const emojiStatus = extension.installed
     ? `meme_emoji 扩展已安装${extension.tag ? ` (${extension.tag})` : ""}`
     : "meme_emoji 扩展未安装";
-  const ready = extension.installed && extension.library_valid && extension.resources_present;
-  elements.extensionState.textContent = ready
-    ? `${status}，运行资源可用`
-    : extension.installed
-      ? `${status}，请检查动态库与资源状态`
-      : status;
-  elements.extensionState.classList.toggle("is-ready", ready);
-  elements.extensionState.classList.toggle("is-warning", !ready);
+  const emojiReady = extension.installed && extension.library_valid && extension.resources_present;
+  const gouqi = data.gouqi_extension || {};
+  const gouqiStatus = gouqi.installed
+    ? `Gouqi 扩展已安装${gouqi.commit ? ` (${String(gouqi.commit).slice(0, 12)})` : ""}`
+    : "Gouqi 扩展未安装";
+  const gouqiReady = gouqi.installed && gouqi.assets_valid;
+  const statuses = [
+    emojiReady ? `${emojiStatus}，运行资源可用` : extension.installed ? `${emojiStatus}，请检查动态库与资源状态` : emojiStatus,
+    gouqiReady ? `${gouqiStatus}，已加载 ${gouqi.templates || 0} 个模板` : gouqi.installed ? `${gouqiStatus}，请检查素材状态` : gouqiStatus,
+  ];
+  const hasWarning = (extension.installed && !emojiReady) || (gouqi.installed && !gouqiReady);
+  elements.extensionState.textContent = statuses.join("；");
+  elements.extensionState.classList.toggle("is-ready", !hasWarning && (emojiReady || gouqiReady));
+  elements.extensionState.classList.toggle("is-warning", hasWarning);
 
   renderTopMemes(data.top_memes || []);
   renderConversations(data.active_conversations || []);
@@ -460,7 +466,9 @@ function renderDetail(detail) {
   root.append(heading);
 
   const meta = createElement("div", "detail-meta");
+  const sourceLabels = { gouqi: "Gouqi 扩展", meme_generator: "meme_generator" };
   meta.append(
+    makeDetailBadge("来源", sourceLabels[detail.source] || detail.source || "未知"),
     makeDetailBadge("图片", detail.images?.label || "0"),
     makeDetailBadge("文本", detail.texts?.label || "0"),
     makeDetailBadge("状态", detail.enabled ? "已启用" : "已禁用", detail.enabled ? "is-enabled" : "is-disabled"),

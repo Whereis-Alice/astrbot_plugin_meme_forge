@@ -111,6 +111,40 @@ class MemeEngineTests(unittest.TestCase):
     def test_exact_match_requires_trigger_boundary(self) -> None:
         self.assertIsNone(self.engine.match("奶茶店"))
 
+    def test_extension_key_collision_keeps_existing_meme(self) -> None:
+        params = SimpleNamespace(
+            min_images=0,
+            max_images=0,
+            min_texts=0,
+            max_texts=0,
+            default_texts=[],
+            options=[],
+        )
+        builtin = SimpleNamespace(
+            key="same",
+            info=SimpleNamespace(keywords=["内置"], tags=set(), params=params),
+        )
+        duplicate = SimpleNamespace(
+            key="same",
+            info=SimpleNamespace(keywords=["扩展冲突"], tags=set(), params=params),
+        )
+        added = SimpleNamespace(
+            key="extension_only",
+            info=SimpleNamespace(keywords=["扩展新增"], tags=set(), params=params),
+        )
+        engine = MemeEngine({})
+        engine.module = SimpleNamespace(
+            get_memes=lambda: [builtin],
+            get_version=lambda: "test",
+        )
+        engine.set_extension_memes("test", [duplicate, added])
+
+        engine.reload_memes()
+
+        self.assertIs(engine.resolve("same"), builtin)
+        self.assertIs(engine.resolve("扩展新增"), added)
+        self.assertIsNone(engine.resolve("扩展冲突"))
+
     def test_incomplete_namespace_module_is_reimported(self) -> None:
         engine = MemeEngine({})
         stale = SimpleNamespace(__file__=None)

@@ -73,10 +73,12 @@ class MemeDashboardTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.directory.name)
         self.engine = FakeEngine()
         self.extension = SimpleNamespace(meme_home=self.root / "meme-home")
+        self.gouqi_extension = SimpleNamespace(assets_root=self.root / "gouqi-assets")
         self.dashboard = MemeDashboard(
             self.engine,
             self.extension,
             {"dashboard_preview_max_mb": 1, "trigger_prefix": "meme"},
+            gouqi_extension=self.gouqi_extension,
         )
 
     def tearDown(self) -> None:
@@ -104,6 +106,21 @@ class MemeDashboardTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(overview["trigger_prefix"], "meme")
         self.assertEqual(overview["enabled_memes"], 1)
+
+    async def test_gouqi_source_and_material_directory_are_exposed(self) -> None:
+        self.engine.one.source = "gouqi"
+        self.engine.one.material_directory = (
+            self.gouqi_extension.assets_root / "memes" / "one" / "images"
+        )
+        self.engine.one.material_directory.mkdir(parents=True)
+        (self.engine.one.material_directory / "asset.png").write_bytes(PNG_BYTES)
+
+        detail = self.dashboard.meme_detail("one")
+
+        self.assertEqual(detail["source"], "gouqi")
+        self.assertEqual(detail["materials"]["total"], 1)
+        material = self.dashboard.material("one", "asset.png")
+        self.assertTrue(material["data_url"].startswith("data:image/png;base64,"))
 
     async def test_material_listing_counts_all_and_rejects_path_traversal(self) -> None:
         directory = self.extension.meme_home / "resources" / "images" / "one"

@@ -11,6 +11,7 @@ from typing import Any
 
 import meme_generator as imported_meme_generator
 from astrbot.api import logger
+from PIL import Image as PILImage
 
 from .arguments import OptionValue, format_option_spec, option_specs_from_params
 
@@ -45,6 +46,7 @@ class MemeEngine:
         self._by_key: dict[str, Any] = {}
         self._trigger_map: dict[str, Any] = {}
         self._sorted_triggers: list[str] = []
+        self._extension_memes: dict[str, list[Any]] = {}
 
     @property
     def version(self) -> str:
@@ -89,6 +91,13 @@ class MemeEngine:
     async def initialize(self) -> None:
         self._recover_module()
         await asyncio.to_thread(self.reload_memes)
+
+    def set_extension_memes(self, name: str, memes: list[Any]) -> None:
+        """Replace one reviewed extension's runtime meme objects."""
+        normalized = str(name).strip()
+        if not normalized:
+            raise ValueError("extension name must not be empty")
+        self._extension_memes[normalized] = list(memes)
 
     @staticmethod
     def get_info(meme: Any) -> Any | None:
@@ -142,24 +151,34 @@ class MemeEngine:
 
     def reload_memes(self) -> None:
         get_memes = self._recover_module().get_memes
-        memes = list(get_memes())
+        sources: list[tuple[str, list[Any]]] = [("meme_generator", list(get_memes()))]
+        sources.extend(self._extension_memes.items())
 
         by_key: dict[str, Any] = {}
         trigger_map: dict[str, Any] = {}
-        for meme in memes:
-            key = str(getattr(meme, "key", "")).strip()
-            if not key:
-                continue
-            by_key[key] = meme
-            trigger_map.setdefault(key, meme)
-            for keyword in self.get_keywords(meme):
-                existing = trigger_map.setdefault(keyword, meme)
-                if existing is not meme:
+        for source, memes in sources:
+            for meme in memes:
+                key = str(getattr(meme, "key", "")).strip()
+                if not key:
+                    continue
+                existing_key = by_key.get(key)
+                if existing_key is not None:
                     logger.warning(
-                        "[meme_forge] 重复触发词 %s，保留 meme %s",
-                        keyword,
-                        getattr(existing, "key", "unknown"),
+                        "[meme_forge] 扩展 %s 的重复 meme key %s 已跳过，保留现有实现",
+                        source,
+                        key,
                     )
+                    continue
+                by_key[key] = meme
+                trigger_map[key] = meme
+                for keyword in self.get_keywords(meme):
+                    existing = trigger_map.setdefault(keyword, meme)
+                    if existing is not meme:
+                        logger.warning(
+                            "[meme_forge] 重复触发词 %s，保留 meme %s",
+                            keyword,
+                            getattr(existing, "key", "unknown"),
+                        )
 
         for alias, original in self._custom_aliases().items():
             target = trigger_map.get(original) or by_key.get(original)
@@ -318,6 +337,16 @@ class MemeEngine:
         raise MemeGenerationError(f"{action}失败：{result!r}")
 
     async def generate(self, meme: Any, inputs: MemeInputs) -> bytes:
+        extension_generate = getattr(meme, "generate_from_inputs", None)
+        if callable(extension_generate):
+            try:
+                result = await asyncio.to_thread(extension_generate, inputs)
+            except Exception as exc:
+                raise MemeGenerationError(
+                    f"生成 {meme.key} 失败：{str(exc).strip() or type(exc).__name__}"
+                ) from exc
+            return self._unwrap_result(result, f"生成 {meme.key} 时")
+
         params = self.get_params(meme)
         if self.get_info(meme) is not None and hasattr(self.module, "Image"):
             images = [
@@ -342,12 +371,33 @@ class MemeEngine:
         return self._unwrap_result(result, f"生成 {meme.key} 时")
 
     async def preview(self, meme: Any) -> bytes:
+        extension_preview = getattr(meme, "generate_preview", None)
+        if callable(getattr(meme, "generate_from_inputs", None)) and callable(
+            extension_preview
+        ):
+            try:
+                result = await asyncio.to_thread(extension_preview)
+            except Exception as exc:
+                raise MemeGenerationError(
+                    f"生成 {meme.key} 预览失败：{str(exc).strip() or type(exc).__name__}"
+                ) from exc
+            return self._unwrap_result(result, f"生成 {meme.key} 预览时")
         result = await asyncio.to_thread(meme.generate_preview)
         return self._unwrap_result(result, f"生成 {meme.key} 预览时")
 
     async def render_list(self) -> bytes:
         tools = importlib.import_module("meme_generator.tools")
-        properties = {meme.key: tools.MemeProperties() for meme in self.memes}
+        native_memes = [
+            meme
+            for meme in self.memes
+            if not callable(getattr(meme, "generate_from_inputs", None))
+        ]
+        extension_memes = [
+            meme
+            for meme in self.memes
+            if callable(getattr(meme, "generate_from_inputs", None))
+        ]
+        properties = {meme.key: tools.MemeProperties() for meme in native_memes}
         result = await asyncio.to_thread(
             tools.render_meme_list,
             meme_properties=properties,
@@ -357,7 +407,40 @@ class MemeEngine:
             text_template="{index}. {keywords}",
             add_category_icon=True,
         )
-        return self._unwrap_result(result, "生成 meme 列表时")
+        native = self._unwrap_result(result, "生成 meme 列表时")
+        if not extension_memes:
+            return native
+
+        from .gouqi_memes import render_gouqi_list_panel
+
+        extension = await asyncio.to_thread(
+            render_gouqi_list_panel,
+            extension_memes,
+        )
+        return await asyncio.to_thread(self._append_list_panel, native, extension)
+
+    @staticmethod
+    def _append_list_panel(native: bytes, extension: bytes) -> bytes:
+        with (
+            PILImage.open(io.BytesIO(native)) as native_image,
+            PILImage.open(io.BytesIO(extension)) as extension_image,
+        ):
+            first = native_image.convert("RGBA")
+            second = extension_image.convert("RGBA")
+        width = max(first.width, second.width)
+        canvas = PILImage.new(
+            "RGBA",
+            (width, first.height + second.height),
+            (255, 255, 255, 255),
+        )
+        canvas.alpha_composite(first, ((width - first.width) // 2, 0))
+        canvas.alpha_composite(
+            second,
+            ((width - second.width) // 2, first.height),
+        )
+        output = io.BytesIO()
+        canvas.save(output, format="PNG")
+        return output.getvalue()
 
     async def check_resources(self, timeout: float) -> str:
         script = (

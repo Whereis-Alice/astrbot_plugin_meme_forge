@@ -142,6 +142,23 @@
     },
     "default": 1800
   },
+  "gouqi_extension_enabled": {
+    "description": "启用 Gouqi 扩展",
+    "hint": "安装 Gouqi 审阅素材后加载对应模板。关闭后保留素材但不注册模板，重载插件后生效。",
+    "type": "bool",
+    "default": true
+  },
+  "gouqi_download_timeout": {
+    "description": "Gouqi 扩展下载超时（秒）",
+    "hint": "仅下载固定审阅提交中的约 7 MB 素材，不执行上游 Python。重载插件后生效。",
+    "type": "int",
+    "slider": {
+      "min": 60,
+      "max": 1800,
+      "step": 60
+    },
+    "default": 600
+  },
   "grabber_enabled": {
     "description": "启用表情提取",
     "hint": "允许通过 /meme工坊提取 提取当前消息或引用消息中的图片、QQ 表情。",

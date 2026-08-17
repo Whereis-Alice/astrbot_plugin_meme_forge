@@ -5,7 +5,7 @@ Meme 工坊是面向 AstrBot 4.x 的本地 meme 表情包生成插件。它使�
 `astrbot_plugin_memelite` 并存。
 
 除了常规生成，插件还提供完整参数解析、随机 meme、个人收藏、QQ 表情提取、
-`meme_emoji` 扩展，以及用于查看和管理表情库的 AstrBot Dashboard 页面。
+`meme_emoji` 与 Gouqi 扩展，以及用于查看和管理表情库的 AstrBot Dashboard 页面。
 
 ## 功能概览
 
@@ -16,7 +16,8 @@ Meme 工坊是面向 AstrBot 4.x 的本地 meme 表情包生成插件。它使�
 - 按“平台 + 用户 ID”独立、跨重启保存的个人收藏夹。
 - 引用当前或历史消息，提取普通图片和 QQ OneBot 可访问的表情为可保存文件。
 - 提供最近使用记录：个人最近 3 个、当前会话最近记录、管理员全局记录。
-- 提供只读更新检查，分别报告内置引擎和 `meme_emoji` 扩展是否有兼容新版本。
+- 可选安装 Gouqi 扩展的 10 个自定义模板；素材逐文件校验，安装后立即参与随机、收藏和 WebUI 管理。
+- 提供只读更新检查，分别报告内置引擎、`meme_emoji` 和 Gouqi 扩展状态。
 - 在 Dashboard 中搜索、筛选、预览、查看参数与素材、启停单个 meme，并查看最近生成记录。
 
 ## 安装
@@ -111,6 +112,8 @@ apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0
 | `/meme工坊更新检查` | 管理员 | 只读检查内置引擎与扩展是否有兼容更新 |
 | `/meme工坊扩展状态` | 所有人 | 查看 `meme_emoji` 扩展状态 |
 | `/meme工坊扩展安装 确认` | 管理员 | 下载或更新扩展，完成后重启 AstrBot |
+| `/meme工坊Gouqi扩展状态` | 所有人 | 查看 Gouqi 审阅版本、素材校验和加载数量 |
+| `/meme工坊Gouqi扩展安装 确认` | 管理员 | 下载并热加载 Gouqi 审阅素材，无需重启 |
 
 常用短别名包括 `/随机meme`、`/最近meme`、`/meme收藏`、`/meme收藏夹`、
 `/meme提取`、`/提取meme` 和 `/meme更新检查`。为降低与其他插件的冲突，优先使用完整的“meme工坊”命名空间。
@@ -168,7 +171,7 @@ apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0
 - 名称、关键词、标签和启用状态筛选。
 - 单个 meme 启用或禁用，变更会立即保存到 `disabled_memes`。
 - 运行时输入数量、默认文本、自然别名、参数 flag、枚举值和数值范围。
-- 按需生成的 meme 预览，以及 `$MEME_HOME/resources/images/<meme key>` 下可用的素材图片。
+- 按需生成的 meme 预览，以及内置、`meme_emoji` 或 Gouqi 扩展已安装的本地素材图片。
 - 全局最近成功生成记录，或按会话筛选查看群友/私聊参与者的最近触发情况。
 
 页面所有接口均通过 AstrBot Plugin Page Bridge 访问；预览和素材以受大小限制的 data URL 返回，页面不会暴露服务器上的绝对路径。Dashboard 管理员可见的最近记录不含生成图片，只包含触发词、meme key、平台、会话、用户和时间。
@@ -195,6 +198,46 @@ apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0
 
 安装前请预留约 1.1 GB 可用空间。动态库与资源不包含在本插件发布包中，且仍分别受上游的许可证、免责声明和资源权利说明约束。
 
+## Gouqi 扩展
+
+[`amalopyy123/meme-generator-gouqi`](https://github.com/amalopyy123/meme-generator-gouqi)
+使用旧版 Python `add_meme` API，不能直接放入本插件使用。Meme 工坊为它提供独立兼容层：
+
+1. 只安装插件已经人工审阅的固定上游提交，不跟随 `master` 自动执行新代码。
+2. 仅从原仓库下载 31 个明确列出的图片/GIF 素材；不会解压或执行其中的 `.py`、`.pyc`。
+3. 对每个素材同时核对路径、大小和 Git blob 哈希；任一文件不符就拒绝安装。
+4. 使用本插件的 Pillow 渲染适配层生成图片，并限制输入像素、动画帧数和 GIF 输出大小。
+5. 安装成功后立即热加载，无需重启；10 个模板会自动接入随机、收藏、最近记录、禁用和 Dashboard。
+
+安装前先查看提示：
+
+```text
+/meme工坊Gouqi扩展安装
+```
+
+确认拥有作者和素材使用授权后执行：
+
+```text
+/meme工坊Gouqi扩展安装 确认
+```
+
+可用模板如下。表格中的图片数量也可通过 `/meme工坊详情 <关键词>` 或 Dashboard 查看。
+
+| Key | 关键词 | 图片 | 输出 |
+|---|---|---:|---|
+| `ceshi` | 测试 | 1 | 静态图，需要 1 段文本 |
+| `eav_grill` | 伊娃烧 | 1 | 动图 |
+| `greeting_cat` | 挥手猫 | 1 | 动图 |
+| `haine_shoot` | 海涅喷射 | 1 | 动图 |
+| `i_squeeze` | 我捏 | 2 | 动图 |
+| `line_art` | 线稿化、线稿、素描线稿 | 1 | 静态图或跟随输入动图 |
+| `lucifina_chan_squeeze` | 小露西菲娜捏 | 1 | 动图 |
+| `lucifina_squeeze` | 露西菲娜捏 | 1 | 动图 |
+| `lucifinac_twist` | 小露西菲娜旋转、小露西旋转、小菲娜旋转 | 1 | 动图 |
+| `luluka_twist` | 露露卡旋转 | 1 | 动图 |
+
+截至审阅提交 `40eb41cf7c30`，Gouqi 上游没有声明开源许可证。公开可见不等于获得复制或使用授权，因此本插件不分发其源码和素材，安装命令也会在确认前再次提示。请先取得上游作者及相关素材权利人的许可；具体边界见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
 ## 更新检查
 
 管理员可执行：
@@ -207,8 +250,9 @@ apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0
 
 - 当前 `meme_generator` 版本，以及 PyPI 上符合插件兼容范围 `>=0.2.3,<0.3` 的最新稳定版本。
 - 当前平台已安装的 `meme_emoji` 版本、最新 GitHub Release，以及本地动态库、许可证、资源和外部加载配置是否完整。
+- Gouqi 本地素材是否完整、插件当前审阅提交和上游 `master` 最新提交是否一致。
 
-检查是只读操作，不会运行 `pip`、下载扩展或修改配置。扩展有更新时，按结果提示执行 `/meme工坊扩展更新 确认`，完成后重启 AstrBot。内置素材没有独立的只读版本接口，因此需要检查或补齐素材时仍执行 `/meme工坊资源检查`。
+检查是只读操作，不会运行 `pip`、下载扩展或修改配置。`meme_emoji` 有更新时，按结果提示执行 `/meme工坊扩展更新 确认`，完成后重启 AstrBot。Gouqi 上游出现新提交时只会报告“未审阅”，不会下载或执行；需要先由 Meme 工坊更新适配版本。内置素材没有独立的只读版本接口，因此需要检查或补齐素材时仍执行 `/meme工坊资源检查`。
 
 ## 配置
 
@@ -236,6 +280,8 @@ apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0
 | `check_resources_on_start` | `false` | 启动后后台检查资源 |
 | `resource_check_timeout` | `180` | 资源检查超时（秒） |
 | `extension_download_timeout` | `1800` | 扩展下载超时（秒） |
+| `gouqi_extension_enabled` | `true` | 是否注册已安装的 Gouqi 模板，重载后生效 |
+| `gouqi_download_timeout` | `600` | Gouqi 固定审阅素材下载超时（秒） |
 | `history_limit` | `500` | 持久化最近成功生成记录上限，范围 100-2000 |
 | `dashboard_preview_max_mb` | `4` | 单张 WebUI 预览/素材传输上限（MB） |
 
@@ -258,7 +304,7 @@ apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0
 - `/meme工坊最近` 只保留当前插件运行期间每位用户最近的 3 个不同 meme；它不是持久记录。
 - QQ 与 QQ 官方 Bot 头像缓存只保存在插件进程内存中，不写入插件数据目录，插件重载或关闭时会清空。
 - Dashboard 中的全局和会话记录面向拥有 AstrBot Dashboard 权限的管理员，请按部署环境的隐私要求配置权限。
-- 更新检查会访问 PyPI 和 GitHub Release API；生成资源和扩展安装会访问上游 GitHub/CDN；网络图片和头像会访问其原始地址或腾讯头像 CDN，并受协议、超时和大小限制。
+- 更新检查会访问 PyPI、GitHub Release/Commit API；生成资源和扩展安装会访问相应上游 GitHub/CDN。Gouqi 安装只下载固定审阅提交的图片素材。网络图片和头像会访问其原始地址或腾讯头像 CDN，并受协议、超时和大小限制。
 
 ## 常见问题
 
@@ -274,9 +320,11 @@ apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0
 
 先重启 AstrBot，再执行 `/meme工坊扩展状态`。确认动态库校验、资源目录和外部加载均正常；若仍失败，请查看 AstrBot 日志中的 ABI 或系统库错误。
 
+如果安装的是 Gouqi 扩展，不需要重启：执行 `/meme工坊Gouqi扩展状态`，确认“素材校验”为“通过”、“扩展开关”为“已启用”。如果安装时开关已关闭，启用 `gouqi_extension_enabled` 后重载插件。
+
 ### WebUI 中没有素材图片
 
-素材只在本机已下载的 `$MEME_HOME/resources/images/<meme key>` 中显示。未下载资源、该 meme 没有素材目录，或图片超过 `dashboard_preview_max_mb` 时，页面不会显示可查看的素材。
+素材只显示本机已下载的内置/扩展资源；Gouqi 素材保存在插件隔离数据目录中，也会通过同一受限接口显示。未下载资源、该 meme 没有素材目录，或图片超过 `dashboard_preview_max_mb` 时，页面不会显示可查看的素材。
 
 ### QQ 官方 Bot 没有自动带入头像
 
@@ -292,4 +340,5 @@ apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0
 - [`Zhalslar/astrbot_plugin_memelite`](https://github.com/Zhalslar/astrbot_plugin_memelite)：AstrBot 对接、消息输入、参数收集和管理思路的上游参考；v1.5.0 继续参考其头像缓存与 QQ 官方 Bot 适配，并按本项目的下载安全边界重新实现。
 - [`XTsat/astrbot_plugin_meme_grabber`](https://github.com/XTsat/astrbot_plugin_meme_grabber)：表情提取交互和 QQ OneBot 回退处理的上游参考；其公开 issue 在本次整合时为 0。
 - [`anyliew/meme_emoji`](https://github.com/anyliew/meme_emoji) 与 [`anyliew/meme-emoji`](https://github.com/anyliew/meme-emoji)：扩展表情和 Rust 兼容实现来源。
+- [`amalopyy123/meme-generator-gouqi`](https://github.com/amalopyy123/meme-generator-gouqi)：Gouqi 扩展的模板设计与素材来源；感谢作者提供这些自定义 meme。由于上游尚未声明许可证，本插件不打包其源码和素材。
 - [`MemeCrafters/meme-generator-rs`](https://github.com/MemeCrafters/meme-generator-rs)：实际使用的 meme 生成引擎。

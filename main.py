@@ -28,6 +28,7 @@ from .core.favorites import (
     normalize_favorites,
     remove_favorite,
 )
+from .core.gouqi_extension import GouqiExtensionError, GouqiExtensionManager
 from .core.grabber import MemeGrabber, MemeGrabError
 from .core.history import MemeUsageHistory
 from .core.updates import (
@@ -56,18 +57,25 @@ class MemeForgePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
+        data_dir = StarTools.get_data_dir(PLUGIN_ID)
         self.collector = ParamsCollector(config)
         self.engine = MemeEngine(config)
         self.grabber = MemeGrabber(
-            StarTools.get_data_dir(PLUGIN_ID) / "grabbed_memes",
+            data_dir / "grabbed_memes",
             self.collector,
             config,
         )
         self.extension = MemeEmojiExtensionManager(
-            StarTools.get_data_dir(PLUGIN_ID),
+            data_dir,
             config,
         )
-        self.dashboard = MemeDashboard(self.engine, self.extension, config)
+        self.gouqi_extension = GouqiExtensionManager(data_dir, config)
+        self.dashboard = MemeDashboard(
+            self.engine,
+            self.extension,
+            config,
+            gouqi_extension=self.gouqi_extension,
+        )
         parallel = max(1, int(self._config_value("max_parallel_generations", 2)))
         self._generation_slots = asyncio.Semaphore(parallel)
         self._resource_task: asyncio.Task[None] | None = None
@@ -117,11 +125,18 @@ class MemeForgePlugin(Star):
     async def dashboard_overview(self):
         """Return the compact state shown at the top of the plugin Page."""
         try:
-            extension_status = await asyncio.to_thread(self.extension.status)
+            extension_status, gouqi_status = await asyncio.gather(
+                asyncio.to_thread(self.extension.status),
+                asyncio.to_thread(self.gouqi_extension.status),
+            )
             return jsonify(
                 {
                     "ok": True,
-                    **self.dashboard.overview(self._usage_history, extension_status),
+                    **self.dashboard.overview(
+                        self._usage_history,
+                        extension_status,
+                        gouqi_status,
+                    ),
                 }
             )
         except Exception as exc:  # noqa: BLE001 - Dashboard must report failures as JSON
@@ -410,7 +425,20 @@ class MemeForgePlugin(Star):
             dump_favorites(favorites),
         )
 
+    async def _refresh_gouqi_memes(self, *, reload_engine: bool) -> int:
+        gouqi_memes: list[Any] = []
+        if self._config_value("gouqi_extension_enabled", True):
+            try:
+                gouqi_memes = await asyncio.to_thread(self.gouqi_extension.load_memes)
+            except Exception as exc:  # noqa: BLE001 - invalid extension data is isolated
+                logger.warning("[meme_forge] Gouqi 扩展加载失败: %s", exc)
+        self.engine.set_extension_memes("gouqi", gouqi_memes)
+        if reload_engine:
+            await asyncio.to_thread(self.engine.reload_memes)
+        return len(gouqi_memes)
+
     async def initialize(self) -> None:
+        await self._refresh_gouqi_memes(reload_engine=False)
         await self.engine.initialize()
         try:
             records = await self.get_kv_data(OUTPUT_INDEX_KV_KEY, [])
@@ -585,7 +613,7 @@ class MemeForgePlugin(Star):
     @filter.command("meme工坊更新检查", alias={"meme更新检查"})
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def check_updates(self, event: AstrMessageEvent):
-        """Check compatible engine and meme_emoji releases without installing."""
+        """Check compatible engine and reviewed extension revisions without installing."""
         engine_task = asyncio.create_task(
             asyncio.wait_for(fetch_latest_compatible_meme_generator(), timeout=20)
         )
@@ -595,13 +623,36 @@ class MemeForgePlugin(Star):
         status_task = asyncio.create_task(
             asyncio.wait_for(asyncio.to_thread(self.extension.status), timeout=20)
         )
-        latest_engine, latest_extension, extension_status = await asyncio.gather(
+        gouqi_revision_task = asyncio.create_task(
+            asyncio.wait_for(self.gouqi_extension.latest_revision(), timeout=20)
+        )
+        gouqi_status_task = asyncio.create_task(
+            asyncio.wait_for(
+                asyncio.to_thread(self.gouqi_extension.status),
+                timeout=20,
+            )
+        )
+        (
+            latest_engine,
+            latest_extension,
+            extension_status,
+            latest_gouqi,
+            gouqi_status,
+        ) = await asyncio.gather(
             engine_task,
             extension_task,
             status_task,
+            gouqi_revision_task,
+            gouqi_status_task,
             return_exceptions=True,
         )
-        for result in (latest_engine, latest_extension, extension_status):
+        for result in (
+            latest_engine,
+            latest_extension,
+            extension_status,
+            latest_gouqi,
+            gouqi_status,
+        ):
             if isinstance(result, asyncio.CancelledError):
                 raise result
 
@@ -638,14 +689,14 @@ class MemeForgePlugin(Star):
         if isinstance(extension_status, BaseException):
             logger.warning("[meme_forge] 读取扩展状态失败: %s", extension_status)
             current_extension = "状态读取失败"
-            status_available = False
-            installed = False
-            healthy = False
+            emoji_status_available = False
+            emoji_installed = False
+            emoji_healthy = False
         else:
             current_extension = extension_status.tag or "未安装"
-            status_available = True
-            installed = extension_status.installed
-            healthy = all(
+            emoji_status_available = True
+            emoji_installed = extension_status.installed
+            emoji_healthy = all(
                 (
                     extension_status.library_valid,
                     extension_status.license_present,
@@ -661,17 +712,63 @@ class MemeForgePlugin(Star):
             lines.append(f"- 最新版本：检查失败（{extension_error}）")
         else:
             lines.append(f"- 最新版本：{latest_extension.tag}")
-            if not status_available:
+            if not emoji_status_available:
                 extension_state = "无法判断本地安装状态"
-            elif not installed:
+            elif not emoji_installed:
                 extension_state = "尚未安装"
             elif current_extension != latest_extension.tag:
                 extension_state = "有更新可用"
-            elif not healthy:
+            elif not emoji_healthy:
                 extension_state = "版本最新，但本地安装不完整或校验未通过"
             else:
                 extension_state = "已是最新版本，且本地校验通过"
             lines.append(f"- 状态：{extension_state}")
+
+        supported_gouqi = self.gouqi_extension.SUPPORTED_COMMIT
+        lines.extend(["", "Gouqi 扩展："])
+        if isinstance(gouqi_status, BaseException):
+            logger.warning("[meme_forge] 读取 Gouqi 扩展状态失败: %s", gouqi_status)
+            gouqi_installed = False
+            gouqi_healthy = False
+            current_gouqi = "状态读取失败"
+            gouqi_status_available = False
+        else:
+            gouqi_installed = gouqi_status.installed
+            gouqi_healthy = gouqi_status.assets_valid
+            current_gouqi = (
+                gouqi_status.commit[:12] if gouqi_status.commit else "未安装"
+            )
+            gouqi_status_available = True
+        lines.extend(
+            [
+                f"- 当前版本：{current_gouqi}",
+                f"- 插件已审阅版本：{supported_gouqi[:12]}",
+            ]
+        )
+        if isinstance(latest_gouqi, BaseException):
+            logger.warning("[meme_forge] 检查 Gouqi 上游提交失败: %s", latest_gouqi)
+            lines.append(
+                f"- 上游最新提交：检查失败（{format_check_error(latest_gouqi)}）"
+            )
+            upstream_reviewed = False
+        else:
+            lines.append(f"- 上游最新提交：{latest_gouqi.commit[:12]}")
+            upstream_reviewed = latest_gouqi.commit == supported_gouqi
+
+        if not gouqi_status_available:
+            gouqi_state = "无法判断本地安装状态"
+        elif not gouqi_installed:
+            gouqi_state = "尚未安装"
+        elif gouqi_status.commit != supported_gouqi:
+            gouqi_state = "本地不是插件当前审阅版本"
+        elif not gouqi_healthy:
+            gouqi_state = "已安装，但素材缺失或哈希校验未通过"
+        else:
+            gouqi_state = "已安装，审阅素材校验通过"
+        lines.append(f"- 状态：{gouqi_state}")
+        if not isinstance(latest_gouqi, BaseException) and not upstream_reviewed:
+            lines.append("- 提示：上游有未审阅改动，需等待 Meme 工坊适配后更新。")
+        lines.append("- 许可：上游暂未声明开源许可证，不会打包进本插件。")
 
         lines.extend(
             [
@@ -681,11 +778,22 @@ class MemeForgePlugin(Star):
             ]
         )
         if not isinstance(latest_extension, BaseException) and (
-            not installed or current_extension != latest_extension.tag or not healthy
+            not emoji_installed
+            or current_extension != latest_extension.tag
+            or not emoji_healthy
         ):
             lines.append(
                 "扩展可执行 /meme工坊扩展更新 确认，完成后重启 AstrBot。"
             )
+        if (
+            not gouqi_installed
+            or not gouqi_healthy
+            or (
+                not isinstance(gouqi_status, BaseException)
+                and gouqi_status.commit != supported_gouqi
+            )
+        ):
+            lines.append("Gouqi 扩展可执行 /meme工坊Gouqi扩展安装 确认。")
         yield event.plain_result("\n".join(lines))
 
     @filter.command("meme工坊扩展安装", alias={"meme工坊扩展更新"})
@@ -717,6 +825,76 @@ class MemeForgePlugin(Star):
             return
         yield event.plain_result(
             f"meme_emoji 兼容扩展 {status.tag or ''} 已安装。请重启 AstrBot 后使用。"
+        )
+
+    @filter.command(
+        "meme工坊Gouqi扩展状态",
+        alias={"meme工坊枸杞扩展状态"},
+    )
+    async def gouqi_extension_status(self, event: AstrMessageEvent):
+        """查看 Gouqi 兼容扩展的审阅版本和素材状态。"""
+        status = await asyncio.to_thread(self.gouqi_extension.status)
+        loaded = sum(
+            1 for meme in self.engine.memes if getattr(meme, "source", "") == "gouqi"
+        )
+        lines = [
+            f"安装记录：{'有' if status.installed else '无'}",
+            f"本地版本：{status.commit[:12] if status.commit else '未安装'}",
+            f"插件审阅版本：{self.gouqi_extension.SUPPORTED_COMMIT[:12]}",
+            f"素材校验：{'通过' if status.assets_valid else '未通过'}",
+            f"素材文件：{status.asset_files} 个",
+            f"已加载 meme：{loaded} 个",
+            f"扩展开关：{'已启用' if self._config_value('gouqi_extension_enabled', True) else '已关闭'}",
+            "上游许可证：暂未声明；素材不会打包进本插件。",
+        ]
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command(
+        "meme工坊Gouqi扩展安装",
+        alias={
+            "meme工坊Gouqi扩展更新",
+            "meme工坊枸杞扩展安装",
+            "meme工坊枸杞扩展更新",
+        },
+    )
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def install_gouqi_extension(
+        self,
+        event: AstrMessageEvent,
+        confirmation: str | None = None,
+    ):
+        """Install reviewed Gouqi assets without executing upstream Python."""
+        if confirmation != "确认":
+            yield event.plain_result(
+                "Gouqi 上游目前未声明开源许可证。仅在你已获得作者及素材使用授权时继续；"
+                "本操作会从原仓库下载约 7 MB 素材，不会执行其中的 Python。"
+                "请使用 /meme工坊Gouqi扩展安装 确认 继续。"
+            )
+            return
+        yield event.plain_result("开始安装 Gouqi 审阅素材并校验每个文件。")
+        try:
+            status = await self.gouqi_extension.install()
+            loaded = await self._refresh_gouqi_memes(reload_engine=True)
+        except (
+            GouqiExtensionError,
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            OSError,
+        ) as exc:
+            yield event.plain_result(f"Gouqi 扩展安装失败：{exc}")
+            return
+        if not status.assets_valid:
+            yield event.plain_result("Gouqi 扩展安装完成，但素材复核未通过，未加载。")
+            return
+        if not self._config_value("gouqi_extension_enabled", True):
+            yield event.plain_result(
+                f"Gouqi 扩展 {status.commit[:12] if status.commit else ''} 已安装；"
+                "当前扩展开关已关闭，启用配置并重载插件后生效。"
+            )
+            return
+        yield event.plain_result(
+            f"Gouqi 扩展 {status.commit[:12] if status.commit else ''} 已安装，"
+            f"已热加载 {loaded} 个 meme，无需重启 AstrBot。"
         )
 
     @filter.command("meme工坊提取", alias={"meme提取", "提取meme"})
@@ -1073,6 +1251,7 @@ class MemeForgePlugin(Star):
                 await self._resource_task
         await self.collector.close()
         await self.extension.close()
+        await self.gouqi_extension.close()
         try:
             await self.grabber.cleanup_all()
         except OSError as exc:

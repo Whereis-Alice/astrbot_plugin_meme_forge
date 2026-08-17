@@ -9,6 +9,7 @@ from typing import Any, ClassVar
 from .arguments import option_specs_from_params
 from .engine import MemeEngine, MemeEngineError
 from .extensions import MemeEmojiExtensionManager
+from .gouqi_extension import GouqiExtensionManager
 from .history import MemeUsageHistory
 
 
@@ -34,9 +35,12 @@ class MemeDashboard:
         engine: MemeEngine,
         extension: MemeEmojiExtensionManager,
         config: Any,
+        *,
+        gouqi_extension: GouqiExtensionManager | None = None,
     ) -> None:
         self.engine = engine
         self.extension = extension
+        self.gouqi_extension = gouqi_extension
         self.config = config
         self._preview_lock = asyncio.Lock()
 
@@ -69,6 +73,7 @@ class MemeDashboard:
         key = str(getattr(meme, "key", ""))
         return {
             "key": key,
+            "source": str(getattr(meme, "source", "meme_generator")),
             "keywords": self.engine.get_keywords(meme),
             "tags": self.engine.get_tags(meme),
             "enabled": not self.engine.is_disabled(meme),
@@ -149,7 +154,12 @@ class MemeDashboard:
             "tags": sorted(tags),
         }
 
-    def overview(self, history: MemeUsageHistory, extension_status: Any) -> dict[str, Any]:
+    def overview(
+        self,
+        history: MemeUsageHistory,
+        extension_status: Any,
+        gouqi_status: Any | None = None,
+    ) -> dict[str, Any]:
         total = len(self.engine.memes)
         enabled = len(self.engine.available_memes())
         return {
@@ -178,6 +188,12 @@ class MemeDashboard:
                 "tag": extension_status.tag,
                 "library_valid": bool(extension_status.library_valid),
                 "resources_present": bool(extension_status.resources_present),
+            },
+            "gouqi_extension": {
+                "installed": bool(getattr(gouqi_status, "installed", False)),
+                "commit": getattr(gouqi_status, "commit", None),
+                "assets_valid": bool(getattr(gouqi_status, "assets_valid", False)),
+                "templates": int(getattr(gouqi_status, "templates", 0)),
             },
         }
 
@@ -240,6 +256,16 @@ class MemeDashboard:
         return self.extension.meme_home / "resources" / "images"
 
     def _material_directory(self, key: str) -> Path:
+        meme = self.engine.resolve(key)
+        custom_directory = getattr(meme, "material_directory", None)
+        if custom_directory is not None:
+            directory = Path(custom_directory).resolve(strict=False)
+            if self.gouqi_extension is None:
+                raise DashboardError("扩展素材目录不可用。")
+            root = self.gouqi_extension.assets_root.resolve(strict=False)
+            if directory != root and root not in directory.parents:
+                raise DashboardError("扩展素材路径无效。")
+            return directory
         root = self._material_root.resolve(strict=False)
         directory = (root / key).resolve(strict=False)
         if directory != root and root not in directory.parents:

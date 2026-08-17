@@ -53,6 +53,25 @@ AstrBot 或平台适配器升级造成的硬耦合；普通图片下载、大小
 本插件已有的输入收集器。提取结果会暂存到插件数据目录，并按配置延迟清理，
 避免消息发送尚未完成时删除临时文件。
 
+## meme-generator-gouqi
+
+- Project: https://github.com/amalopyy123/meme-generator-gouqi
+- Author: amalopyy123
+- Reviewed revision: `40eb41cf7c308315a3186e74954ff011d9c26dd0`
+- Declared license at reviewed revision: none
+
+该仓库是可选 Gouqi 扩展的模板设计与素材来源。其 Python 模块依赖旧版
+`add_meme` API，Meme 工坊不会导入或执行这些模块，而是针对当前
+`meme_generator 0.2.x` 在本项目内提供受限的 Pillow 兼容渲染层。
+
+本插件仓库不包含 Gouqi 上游源码、缓存文件或图片素材。管理员明确确认后，安装器
+才会从原仓库的固定审阅提交下载 31 个列入白名单的图片/GIF，并逐项校验路径、大小
+和 Git blob 哈希。上游 `master` 的新提交只会在更新检查中报告，不会自动执行。
+
+GitHub 仓库公开可见不代表授予复制、修改、分发或素材使用许可。部署者应在安装前
+取得上游作者及相关素材权利人的授权；Meme 工坊的 AGPL-3.0-or-later 许可证不覆盖
+运行时下载的 Gouqi 素材。
+
 ## No Endorsement
 
 References to upstream project names identify technical provenance only. They

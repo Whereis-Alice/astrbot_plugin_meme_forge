@@ -9,6 +9,10 @@ from astrbot_plugin_meme_forge.core.extensions import (
     ExtensionStatus,
     ReleaseAsset,
 )
+from astrbot_plugin_meme_forge.core.gouqi_extension import (
+    GouqiExtensionStatus,
+    GouqiSourceRevision,
+)
 from astrbot_plugin_meme_forge.core.updates import (
     UpdateCheckError,
     compare_engine_versions,
@@ -46,6 +50,8 @@ class UpdateVersionTests(unittest.TestCase):
 
 
 class UpdateCommandTests(unittest.IsolatedAsyncioTestCase):
+    GOUQI_COMMIT = "40eb41cf7c308315a3186e74954ff011d9c26dd0"
+
     class Event:
         @staticmethod
         def plain_result(text: str) -> str:
@@ -76,6 +82,28 @@ class UpdateCommandTests(unittest.IsolatedAsyncioTestCase):
             external_loading_enabled=installed,
         )
 
+    @classmethod
+    def gouqi_extension(cls, *, latest: str | None = None) -> SimpleNamespace:
+        commit = latest or cls.GOUQI_COMMIT
+        return SimpleNamespace(
+            SUPPORTED_COMMIT=cls.GOUQI_COMMIT,
+            latest_revision=AsyncMock(
+                return_value=GouqiSourceRevision(
+                    commit=commit,
+                    committed_at="2026-08-08T08:55:53Z",
+                    url=f"https://example.com/{commit}",
+                )
+            ),
+            status=lambda: GouqiExtensionStatus(
+                installed=True,
+                commit=cls.GOUQI_COMMIT,
+                assets_valid=True,
+                asset_files=31,
+                templates=10,
+                source_license_declared=False,
+            ),
+        )
+
     @staticmethod
     async def collect(generator) -> str:
         return "\n".join([result async for result in generator])
@@ -91,6 +119,7 @@ class UpdateCommandTests(unittest.IsolatedAsyncioTestCase):
             ),
             status=lambda: self.extension_status("v0.0.6+build.42"),
         )
+        plugin.gouqi_extension = self.gouqi_extension()
 
         with patch(
             "astrbot_plugin_meme_forge.main.fetch_latest_compatible_meme_generator",
@@ -110,6 +139,7 @@ class UpdateCommandTests(unittest.IsolatedAsyncioTestCase):
             latest_release=AsyncMock(return_value=self.extension_release("v1.0.0")),
             status=lambda: self.extension_status("v1.0.0"),
         )
+        plugin.gouqi_extension = self.gouqi_extension()
 
         with patch(
             "astrbot_plugin_meme_forge.main.fetch_latest_compatible_meme_generator",
@@ -119,6 +149,24 @@ class UpdateCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("最新版本：检查失败（PyPI unavailable）", output)
         self.assertIn("已是最新版本，且本地校验通过", output)
+
+    async def test_unreviewed_gouqi_commit_is_not_offered_for_install(self) -> None:
+        plugin = MemeForgePlugin.__new__(MemeForgePlugin)
+        plugin.engine = SimpleNamespace(version="0.2.3")
+        plugin.extension = SimpleNamespace(
+            latest_release=AsyncMock(return_value=self.extension_release("v1.0.0")),
+            status=lambda: self.extension_status("v1.0.0"),
+        )
+        plugin.gouqi_extension = self.gouqi_extension(latest="f" * 40)
+
+        with patch(
+            "astrbot_plugin_meme_forge.main.fetch_latest_compatible_meme_generator",
+            new=AsyncMock(return_value="0.2.3"),
+        ):
+            output = await self.collect(plugin.check_updates(self.Event()))
+
+        self.assertIn("上游有未审阅改动", output)
+        self.assertIn("需等待 Meme 工坊适配后更新", output)
 
 
 if __name__ == "__main__":
