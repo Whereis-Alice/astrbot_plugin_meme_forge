@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 import importlib
 import io
+import json
 import os
 import random
+import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 import meme_generator as imported_meme_generator
 from astrbot.api import logger
@@ -39,6 +42,10 @@ class MemeInputs:
 
 
 class MemeEngine:
+    _BUILTIN_KEYS_MARKER: ClassVar[str] = "MEME_FORGE_BUILTIN_KEYS="
+    _builtin_key_cache: ClassVar[frozenset[str] | None] = None
+    _builtin_key_probe_failed: ClassVar[bool] = False
+
     def __init__(self, config: Any):
         self.config = config
         self.module: Any = imported_meme_generator
@@ -47,6 +54,7 @@ class MemeEngine:
         self._trigger_map: dict[str, Any] = {}
         self._sorted_triggers: list[str] = []
         self._extension_memes: dict[str, list[Any]] = {}
+        self._source_by_key: dict[str, str] = {}
 
     @property
     def version(self) -> str:
@@ -98,6 +106,69 @@ class MemeEngine:
         if not normalized:
             raise ValueError("extension name must not be empty")
         self._extension_memes[normalized] = list(memes)
+
+    @classmethod
+    def _load_builtin_keys(cls) -> frozenset[str] | None:
+        """Read the built-in registry in an isolated meme-generator home."""
+        if cls._builtin_key_cache is not None:
+            return cls._builtin_key_cache
+        if cls._builtin_key_probe_failed:
+            return None
+
+        script = (
+            "import json\n"
+            "from meme_generator import get_meme_keys\n"
+            f"print({cls._BUILTIN_KEYS_MARKER!r} + json.dumps(get_meme_keys()))\n"
+        )
+        creationflags = 0x08000000 if os.name == "nt" else 0
+        try:
+            with tempfile.TemporaryDirectory(prefix="meme-forge-builtins-") as home:
+                environment = os.environ.copy()
+                environment["MEME_HOME"] = home
+                completed = subprocess.run(
+                    [sys.executable, "-c", script],
+                    capture_output=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=environment,
+                    timeout=30,
+                    check=False,
+                    creationflags=creationflags,
+                )
+            if completed.returncode:
+                detail = completed.stderr.strip() or f"exit code {completed.returncode}"
+                raise MemeEngineError(detail)
+            marker_line = next(
+                (
+                    line
+                    for line in reversed(completed.stdout.splitlines())
+                    if line.startswith(cls._BUILTIN_KEYS_MARKER)
+                ),
+                "",
+            )
+            if not marker_line:
+                raise MemeEngineError("isolated registry did not return meme keys")
+            payload = json.loads(marker_line.removeprefix(cls._BUILTIN_KEYS_MARKER))
+            if not isinstance(payload, list) or not all(
+                isinstance(value, str) and value for value in payload
+            ):
+                raise MemeEngineError("isolated registry returned invalid meme keys")
+        except (
+            MemeEngineError,
+            OSError,
+            subprocess.SubprocessError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            cls._builtin_key_probe_failed = True
+            logger.warning(
+                "[meme_forge] 无法区分内置与原生外部扩展 meme: %s",
+                exc,
+            )
+            return None
+
+        cls._builtin_key_cache = frozenset(payload)
+        return cls._builtin_key_cache
 
     @staticmethod
     def get_info(meme: Any) -> Any | None:
@@ -151,11 +222,13 @@ class MemeEngine:
 
     def reload_memes(self) -> None:
         get_memes = self._recover_module().get_memes
+        builtin_keys = self._load_builtin_keys()
         sources: list[tuple[str, list[Any]]] = [("meme_generator", list(get_memes()))]
         sources.extend(self._extension_memes.items())
 
         by_key: dict[str, Any] = {}
         trigger_map: dict[str, Any] = {}
+        source_by_key: dict[str, str] = {}
         for source, memes in sources:
             for meme in memes:
                 key = str(getattr(meme, "key", "")).strip()
@@ -170,6 +243,14 @@ class MemeEngine:
                     )
                     continue
                 by_key[key] = meme
+                effective_source = source
+                if (
+                    source == "meme_generator"
+                    and builtin_keys is not None
+                    and key not in builtin_keys
+                ):
+                    effective_source = "external"
+                source_by_key[key] = effective_source
                 trigger_map[key] = meme
                 for keyword in self.get_keywords(meme):
                     existing = trigger_map.setdefault(keyword, meme)
@@ -192,6 +273,7 @@ class MemeEngine:
         self.memes = list(by_key.values())
         self._by_key = by_key
         self._trigger_map = trigger_map
+        self._source_by_key = source_by_key
         self._sorted_triggers = sorted(
             trigger_map, key=lambda value: (-len(value), value)
         )
@@ -201,6 +283,21 @@ class MemeEngine:
             len(self._trigger_map),
             self.version,
         )
+
+    def get_source(self, meme: Any) -> str:
+        key = str(getattr(meme, "key", ""))
+        return self._source_by_key.get(
+            key,
+            str(getattr(meme, "source", "meme_generator")),
+        )
+
+    def extension_memes(self) -> list[Any]:
+        """Return all loaded native and compatibility-layer extension memes."""
+        return [
+            meme
+            for meme in self.memes
+            if self.get_source(meme) != "meme_generator"
+        ]
 
     def available_memes(self) -> list[Any]:
         """Return loaded memes that are not disabled by the current config."""
@@ -418,6 +515,61 @@ class MemeEngine:
             extension_memes,
         )
         return await asyncio.to_thread(self._append_list_panel, native, extension)
+
+    async def render_extension_list(self) -> bytes:
+        memes = self.extension_memes()
+        if not memes:
+            raise MemeEngineError(
+                "当前没有加载扩展 meme；请先安装扩展，并按安装提示重启或启用扩展。"
+            )
+
+        native_extensions = [
+            meme
+            for meme in memes
+            if not callable(getattr(meme, "generate_from_inputs", None))
+        ]
+        custom_extensions = [
+            meme
+            for meme in memes
+            if callable(getattr(meme, "generate_from_inputs", None))
+        ]
+        panels: list[bytes] = []
+        if native_extensions:
+            tools = importlib.import_module("meme_generator.tools")
+            selected_keys = {str(meme.key) for meme in native_extensions}
+            native_keys = {
+                str(meme.key)
+                for meme in self.memes
+                if not callable(getattr(meme, "generate_from_inputs", None))
+            }
+            properties = {
+                meme.key: tools.MemeProperties() for meme in native_extensions
+            }
+            result = await asyncio.to_thread(
+                tools.render_meme_list,
+                meme_properties=properties,
+                exclude_memes=sorted(native_keys - selected_keys),
+                sort_by=tools.MemeSortBy.KeywordsPinyin,
+                sort_reverse=False,
+                text_template="{index}. {keywords}",
+                add_category_icon=True,
+            )
+            panels.append(self._unwrap_result(result, "生成扩展 meme 列表时"))
+
+        if custom_extensions:
+            from .gouqi_memes import render_gouqi_list_panel
+
+            panels.append(
+                await asyncio.to_thread(
+                    render_gouqi_list_panel,
+                    custom_extensions,
+                )
+            )
+
+        output = panels[0]
+        for panel in panels[1:]:
+            output = await asyncio.to_thread(self._append_list_panel, output, panel)
+        return output
 
     @staticmethod
     def _append_list_panel(native: bytes, extension: bytes) -> bytes:

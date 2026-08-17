@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.7.1 - 2026-08-17
+
+- 新增 `/meme工坊扩展列表`（短别名 `/meme扩展列表`），只生成当前已加载扩展 meme 的列表图，同时包含 `meme_emoji`/其他原生外部包与 Gouqi 兼容模板。
+- 使用隔离的临时 `MEME_HOME` 读取当前 `meme_generator` 内置 key，再与实际运行时注册表比较；无需硬编码 `meme_emoji` 的数百个 key，扩展更新新增模板后也能自动进入列表。
+- Dashboard 现在会把原生外部扩展标记为“原生外部扩展”，不再统一显示成 `meme_generator`。
+
 ## v1.7.0 - 2026-08-17
 
 - 新增可选 Gouqi 扩展，手动兼容 `amalopyy123/meme-generator-gouqi` 当前 10 个模板；安装后会接入现有参数收集、随机、收藏、最近记录、禁用和 Dashboard 管理。

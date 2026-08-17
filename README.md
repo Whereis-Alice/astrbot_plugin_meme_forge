@@ -96,6 +96,7 @@ apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0
 | 指令 | 权限 | 说明 |
 |---|---|---|
 | `/meme工坊帮助` | 所有人 | 输出当前已加载 meme 的列表图 |
+| `/meme工坊扩展列表` | 所有人 | 只输出当前已加载扩展 meme 的列表图 |
 | `/meme工坊详情 <关键词>` | 所有人 | 查看一个 meme 的预览、输入数量和参数 |
 | `/meme工坊随机` | 所有人 | 从当前可用表情库随机生成一个 meme |
 | `/meme工坊最近` | 所有人 | 查看自己本次插件运行期间最近触发的 3 个不同 meme |
@@ -115,7 +116,11 @@ apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0
 | `/meme工坊Gouqi扩展状态` | 所有人 | 查看 Gouqi 审阅版本、素材校验和加载数量 |
 | `/meme工坊Gouqi扩展安装 确认` | 管理员 | 下载并热加载 Gouqi 审阅素材，无需重启 |
 
-常用短别名包括 `/随机meme`、`/最近meme`、`/meme收藏`、`/meme收藏夹`、
+扩展列表会自动排除当前 `meme_generator` 版本的内置模板，同时包含已经加载的
+`meme_emoji`（以及其他原生外部包）和 Gouqi 模板。安装 `meme_emoji` 后仍需按安装提示
+重启 AstrBot；Gouqi 安装成功后会立即出现在扩展列表中。
+
+常用短别名包括 `/随机meme`、`/最近meme`、`/meme扩展列表`、`/meme收藏`、`/meme收藏夹`、
 `/meme提取`、`/提取meme` 和 `/meme更新检查`。为降低与其他插件的冲突，优先使用完整的“meme工坊”命名空间。
 
 ## 收藏夹

@@ -486,6 +486,22 @@ class MemeForgePlugin(Star):
             return
         yield event.chain_result([Comp.Image.fromBytes(output)])
 
+    @filter.command(
+        "meme工坊扩展列表",
+        alias={"meme工坊扩展帮助", "meme扩展列表", "梗图工坊扩展列表"},
+    )
+    async def meme_extension_help(self, event: AstrMessageEvent):
+        """只查看当前已加载扩展 meme 的列表图。"""
+        try:
+            output = await asyncio.wait_for(
+                self.engine.render_extension_list(),
+                timeout=60,
+            )
+        except (asyncio.TimeoutError, MemeEngineError) as exc:
+            yield event.plain_result(f"扩展列表图生成失败：{exc}")
+            return
+        yield event.chain_result([Comp.Image.fromBytes(output)])
+
     @filter.command("meme工坊详情", alias={"梗图工坊详情"})
     async def meme_details(
         self,

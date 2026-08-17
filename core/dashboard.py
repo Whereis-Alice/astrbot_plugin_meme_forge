@@ -71,9 +71,15 @@ class MemeDashboard:
     def meme_summary(self, meme: Any) -> dict[str, Any]:
         params = self.engine.get_params(meme)
         key = str(getattr(meme, "key", ""))
+        get_source = getattr(self.engine, "get_source", None)
+        source = (
+            str(get_source(meme))
+            if callable(get_source)
+            else str(getattr(meme, "source", "meme_generator"))
+        )
         return {
             "key": key,
-            "source": str(getattr(meme, "source", "meme_generator")),
+            "source": source,
             "keywords": self.engine.get_keywords(meme),
             "tags": self.engine.get_tags(meme),
             "enabled": not self.engine.is_disabled(meme),

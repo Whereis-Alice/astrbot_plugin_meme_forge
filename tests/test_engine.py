@@ -5,7 +5,7 @@ import shlex
 import sys
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from astrbot_plugin_meme_forge.core.arguments import (
     MemeArgumentParser,
@@ -13,6 +13,7 @@ from astrbot_plugin_meme_forge.core.arguments import (
 )
 from astrbot_plugin_meme_forge.core.engine import (
     MemeEngine,
+    MemeEngineError,
     MemeGenerationError,
 )
 
@@ -144,6 +145,73 @@ class MemeEngineTests(unittest.TestCase):
         self.assertIs(engine.resolve("same"), builtin)
         self.assertIs(engine.resolve("扩展新增"), added)
         self.assertIsNone(engine.resolve("扩展冲突"))
+        self.assertEqual(engine.get_source(added), "test")
+
+    def test_native_external_memes_are_distinguished_from_builtins(self) -> None:
+        params = SimpleNamespace(
+            min_images=0,
+            max_images=0,
+            min_texts=0,
+            max_texts=0,
+            default_texts=[],
+            options=[],
+        )
+        builtin = SimpleNamespace(
+            key="builtin",
+            info=SimpleNamespace(keywords=[], tags=set(), params=params),
+        )
+        external = SimpleNamespace(
+            key="external",
+            info=SimpleNamespace(keywords=[], tags=set(), params=params),
+        )
+        engine = MemeEngine({})
+        engine.module = SimpleNamespace(
+            get_memes=lambda: [builtin, external],
+            get_version=lambda: "test",
+        )
+
+        with patch.object(
+            engine,
+            "_load_builtin_keys",
+            return_value=frozenset({"builtin"}),
+        ):
+            engine.reload_memes()
+
+        self.assertEqual(engine.get_source(builtin), "meme_generator")
+        self.assertEqual(engine.get_source(external), "external")
+        self.assertEqual(engine.extension_memes(), [external])
+
+    def test_render_extension_list_excludes_builtin_memes(self) -> None:
+        builtin = SimpleNamespace(key="builtin")
+        external = SimpleNamespace(key="external")
+        engine = MemeEngine({})
+        engine.memes = [builtin, external]
+        engine._source_by_key = {
+            "builtin": "meme_generator",
+            "external": "external",
+        }
+        render_meme_list = Mock(return_value=b"extension-list")
+        tools = SimpleNamespace(
+            MemeProperties=lambda: object(),
+            MemeSortBy=SimpleNamespace(KeywordsPinyin="pinyin"),
+            render_meme_list=render_meme_list,
+        )
+
+        with patch(
+            "astrbot_plugin_meme_forge.core.engine.importlib.import_module",
+            return_value=tools,
+        ):
+            output = asyncio.run(engine.render_extension_list())
+
+        self.assertEqual(output, b"extension-list")
+        call = render_meme_list.call_args.kwargs
+        self.assertEqual(set(call["meme_properties"]), {"external"})
+        self.assertEqual(call["exclude_memes"], ["builtin"])
+
+    def test_render_extension_list_reports_empty_library(self) -> None:
+        engine = MemeEngine({})
+        with self.assertRaisesRegex(MemeEngineError, "没有加载扩展"):
+            asyncio.run(engine.render_extension_list())
 
     def test_incomplete_namespace_module_is_reimported(self) -> None:
         engine = MemeEngine({})

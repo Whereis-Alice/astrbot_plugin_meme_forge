@@ -466,7 +466,11 @@ function renderDetail(detail) {
   root.append(heading);
 
   const meta = createElement("div", "detail-meta");
-  const sourceLabels = { gouqi: "Gouqi 扩展", meme_generator: "meme_generator" };
+  const sourceLabels = {
+    external: "原生外部扩展",
+    gouqi: "Gouqi 扩展",
+    meme_generator: "meme_generator",
+  };
   meta.append(
     makeDetailBadge("来源", sourceLabels[detail.source] || detail.source || "未知"),
     makeDetailBadge("图片", detail.images?.label || "0"),
