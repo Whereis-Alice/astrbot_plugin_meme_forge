@@ -1,99 +1,298 @@
+/**
+ * Meme 工坊 · Dashboard 前端
+ *
+ * 结构：bridge 封装 -> 状态仓库 -> 渲染器 -> 事件绑定。
+ * 所有 DOM 均通过 createElement 构建，避免把后端字符串当作 HTML 解析。
+ */
+
 const bridge = window.AstrBotPluginPage;
-const PAGE_SIZE = 40;
+
+const PAGE_SIZE = 48;
+const HISTORY_LIMIT = 60;
+const BULK_LIMIT = 200;
+const THEME_STORAGE_KEY = "meme-forge-theme";
+const LAYOUT_STORAGE_KEY = "meme-forge-layout";
+
+const VIEWS = ["overview", "library", "records"];
 
 const VIEW_INFO = {
-  overview: {
-    kicker: "CONTROL / OVERVIEW",
-    title: "概览",
-    description: "表情库状态与近期使用情况。",
-  },
-  library: {
-    kicker: "LIBRARY / MANAGE",
-    title: "表情库",
-    description: "浏览、筛选和管理当前已加载的 meme。",
-  },
-  history: {
-    kicker: "ACTIVITY / HISTORY",
-    title: "最近记录",
-    description: "按会话查看最近成功生成的 meme。",
-  },
+  overview: { kicker: "CONTROL / OVERVIEW", title: "概览" },
+  library: { kicker: "LIBRARY / MANAGE", title: "表情库" },
+  records: { kicker: "ACTIVITY / RECORDS", title: "使用记录" },
+};
+
+const SOURCE_INFO = {
+  meme_generator: { label: "内置", note: "meme-generator 自带" },
+  external: { label: "meme_emoji", note: "扩展表情库" },
+  gouqi: { label: "枸杞", note: "枸杞扩展表情库" },
 };
 
 const state = {
-  activeView: "overview",
-  catalog: { items: [], total: 0, tags: [] },
-  detail: null,
+  view: "overview",
   overview: null,
+  catalog: { items: [], total: 0, tags: [], sources: [], offset: 0, limit: PAGE_SIZE },
+  filters: { q: "", tag: "", status: "all", source: "", sort: "key" },
+  layout: "grid",
+  selectMode: false,
+  selection: new Set(),
+  bulkBusy: false,
+  detail: null,
+  detailKey: "",
   history: { items: [], conversations: [] },
-  offset: 0,
-  selectedKey: "",
-  catalogRequest: 0,
-  detailRequest: 0,
-  historyRequest: 0,
+  session: "",
+  recordsMode: "timeline",
+  themeMode: "system",
+  requests: { catalog: 0, detail: 0, history: 0, overview: 0 },
+  previewCache: new Map(),
+  materialCache: new Map(),
 };
 
-const elements = {
-  activeConversations: document.getElementById("active-conversations"),
-  catalogCount: document.getElementById("catalog-count"),
-  catalogMessage: document.getElementById("catalog-message"),
-  detailPane: document.getElementById("detail-pane"),
-  extensionState: document.getElementById("extension-state"),
-  historyList: document.getElementById("history-list"),
-  historyMessage: document.getElementById("history-message"),
-  historySessionFilter: document.getElementById("history-session-filter"),
-  memeList: document.getElementById("meme-list"),
-  metricDisabled: document.getElementById("metric-disabled"),
-  metricEnabled: document.getElementById("metric-enabled"),
-  metricHistory: document.getElementById("metric-history"),
-  metricTotal: document.getElementById("metric-total"),
+const el = (id) => document.getElementById(id);
+
+const dom = {
   navItems: [...document.querySelectorAll("[data-view-target]")],
-  nextPage: document.getElementById("next-page"),
-  openHistoryButton: document.getElementById("open-history-button"),
-  pageStatus: document.getElementById("page-status"),
-  previousPage: document.getElementById("previous-page"),
-  recentActivity: document.getElementById("recent-activity"),
-  refreshButton: document.getElementById("refresh-button"),
-  searchInput: document.getElementById("search-input"),
-  statusFilter: document.getElementById("status-filter"),
-  tagFilter: document.getElementById("tag-filter"),
-  themeDark: document.getElementById("theme-dark"),
-  themeLight: document.getElementById("theme-light"),
-  toast: document.getElementById("toast"),
-  topMemes: document.getElementById("top-memes"),
-  viewDescription: document.getElementById("view-description"),
-  viewKicker: document.getElementById("view-kicker"),
-  viewPanels: [...document.querySelectorAll("[data-view-panel]")],
-  viewTitle: document.getElementById("view-title"),
+  panels: [...document.querySelectorAll("[data-view-panel]")],
+  viewKicker: el("view-kicker"),
+  viewTitle: el("view-title"),
+  statusPill: el("status-pill"),
+  statusText: el("status-text"),
+  refresh: el("refresh-button"),
+  engineVersion: el("engine-version"),
+  navLibraryCount: el("nav-library-count"),
+  navRecordsCount: el("nav-records-count"),
+  themeButtons: [...document.querySelectorAll("[data-theme-mode]")],
+  heroTotal: el("hero-total"),
+  heroMeta: el("hero-meta"),
+  sourceBar: el("source-bar"),
+  sourceLegend: el("source-legend"),
+  extensionList: el("extension-list"),
+  metricTiles: el("metric-tiles"),
+  topMemes: el("top-memes"),
+  activeSessions: el("active-sessions"),
+  recentActivity: el("recent-activity"),
+  search: el("search-input"),
+  sourceChips: el("source-chips"),
+  tagFilter: el("tag-filter"),
+  statusFilter: el("status-filter"),
+  sortFilter: el("sort-filter"),
+  catalogCount: el("catalog-count"),
+  catalogMessage: el("catalog-message"),
+  memeGrid: el("meme-grid"),
+  layoutButtons: [...document.querySelectorAll("[data-layout]")],
+  selectModeButton: el("select-mode-button"),
+  previousPage: el("previous-page"),
+  nextPage: el("next-page"),
+  pageStatus: el("page-status"),
+  bulkBar: el("bulk-bar"),
+  bulkCount: el("bulk-count"),
+  bulkSelectPage: el("bulk-select-page"),
+  bulkEnable: el("bulk-enable"),
+  bulkDisable: el("bulk-disable"),
+  bulkClear: el("bulk-clear"),
+  sessionFilter: el("history-session-filter"),
+  clearSessionFilter: el("clear-session-filter"),
+  recordsModeButtons: [...document.querySelectorAll("[data-records-mode]")],
+  sessionList: el("session-list"),
+  recordsCount: el("records-count"),
+  historyMessage: el("history-message"),
+  historyBody: el("history-body"),
+  drawer: el("drawer"),
+  drawerPanel: el("drawer-panel"),
+  drawerBackdrop: el("drawer-backdrop"),
+  drawerClose: el("drawer-close"),
+  drawerTitle: el("drawer-title"),
+  drawerEyebrow: el("drawer-eyebrow"),
+  drawerBody: el("drawer-body"),
+  lightbox: el("lightbox"),
+  lightboxImage: el("lightbox-image"),
+  lightboxCaption: el("lightbox-caption"),
+  lightboxClose: el("lightbox-close"),
+  toastStack: el("toast-stack"),
 };
 
-function createElement(tagName, className = "", text = undefined) {
-  const element = document.createElement(tagName);
+/* --- 通用小工具 ---------------------------------------------------------- */
+
+function make(tag, className = "", text) {
+  const node = document.createElement(tag);
   if (className) {
-    element.className = className;
+    node.className = className;
   }
   if (text !== undefined) {
-    element.textContent = text;
+    node.textContent = String(text);
   }
-  return element;
+  return node;
 }
 
-function setMessage(element, text = "", isError = false) {
-  element.textContent = text;
-  element.classList.toggle("is-error", Boolean(text) && isError);
+function icon(symbolId, size) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("aria-hidden", "true");
+  if (size) {
+    svg.setAttribute("width", String(size));
+    svg.setAttribute("height", String(size));
+  }
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  use.setAttribute("href", "#" + symbolId);
+  svg.append(use);
+  return svg;
 }
 
-function showToast(text, isError = false) {
-  const { toast } = elements;
-  window.clearTimeout(showToast.timeout);
-  toast.textContent = text;
-  toast.classList.toggle("is-error", isError);
-  toast.hidden = false;
-  showToast.timeout = window.setTimeout(() => {
-    toast.hidden = true;
-  }, 3600);
+function clear(node) {
+  while (node.firstChild) {
+    node.removeChild(node.firstChild);
+  }
 }
 
-function responseData(payload) {
+function setMessage(node, text = "", isError = false) {
+  node.textContent = text;
+  node.classList.toggle("is-error", Boolean(text) && isError);
+  node.hidden = !text;
+}
+
+function emptyState(title, description, symbolId = "i-inbox") {
+  const box = make("div", "empty-state");
+  box.append(icon(symbolId, 30), make("strong", "", title));
+  if (description) {
+    box.append(make("p", "", description));
+  }
+  return box;
+}
+
+function skeleton(count, isRow = false) {
+  const wrap = make("div", isRow ? "" : "skeleton-grid");
+  if (isRow) {
+    wrap.style.display = "grid";
+    wrap.style.gap = "8px";
+  }
+  for (let index = 0; index < count; index += 1) {
+    wrap.append(make("div", isRow ? "skeleton is-row" : "skeleton"));
+  }
+  return wrap;
+}
+
+function hueOf(value) {
+  const text = String(value || "");
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash * 31 + text.charCodeAt(index)) % 360;
+  }
+  return hash;
+}
+
+function glyphOf(value) {
+  const normalized = String(value || "MF").replace(/[^\p{L}\p{N}]/gu, "");
+  return (normalized.slice(0, 2) || "MF").toUpperCase();
+}
+
+function sourceLabel(source) {
+  return SOURCE_INFO[source]?.label || source || "未知";
+}
+
+function formatNumber(value) {
+  return new Intl.NumberFormat("zh-CN").format(Number(value) || 0);
+}
+
+/** 侧边栏徽标空间很窄，四位以上直接压缩成 1.3k / 2.4M。 */
+function formatCompact(value) {
+  const amount = Number(value) || 0;
+  if (amount < 1000) {
+    return String(amount);
+  }
+  if (amount < 1000000) {
+    const scaled = amount / 1000;
+    return (scaled < 10 ? scaled.toFixed(1) : Math.round(scaled)) + "k";
+  }
+  const scaled = amount / 1000000;
+  return (scaled < 10 ? scaled.toFixed(1) : Math.round(scaled)) + "M";
+}
+
+function formatBytes(bytes) {
+  const amount = Number(bytes) || 0;
+  if (amount < 1024) {
+    return amount + " B";
+  }
+  if (amount < 1024 * 1024) {
+    return (amount / 1024).toFixed(1) + " KB";
+  }
+  return (amount / 1024 / 1024).toFixed(1) + " MB";
+}
+
+function parseDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatDateTime(value) {
+  const date = parseDate(value);
+  if (!date) {
+    return String(value || "--");
+  }
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short" }).format(date);
+}
+
+function formatTime(value) {
+  const date = parseDate(value);
+  if (!date) {
+    return "--:--";
+  }
+  return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+function formatDayLabel(value) {
+  const date = parseDate(value);
+  if (!date) {
+    return "未知日期";
+  }
+  const today = new Date();
+  const sameDay = (left, right) =>
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate();
+  if (sameDay(date, today)) {
+    return "今天";
+  }
+  const yesterday = new Date(today.getTime() - 86_400_000);
+  if (sameDay(date, yesterday)) {
+    return "昨天";
+  }
+  return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(date);
+}
+
+function relativeTime(value) {
+  const date = parseDate(value);
+  if (!date) {
+    return "--";
+  }
+  const seconds = Math.round((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60) {
+    return "刚刚";
+  }
+  const units = [
+    [60, "分钟"],
+    [24, "小时"],
+    [7, "天"],
+  ];
+  let amount = seconds / 60;
+  let label = "分钟";
+  for (const [step, name] of units) {
+    if (amount < step) {
+      label = name;
+      break;
+    }
+    amount /= step;
+    label = name;
+  }
+  return Math.max(1, Math.round(amount)) + label + "前";
+}
+
+function shortSession(session) {
+  const text = String(session || "");
+  const parts = text.split(":");
+  return parts.length > 1 ? parts.slice(1).join(":") : text;
+}
+
+/* --- 接口封装 ------------------------------------------------------------ */
+
+function unwrap(payload) {
   if (!payload || payload.ok !== true) {
     throw new Error(payload?.error || "请求未返回可用数据。");
   }
@@ -104,48 +303,621 @@ async function apiGet(endpoint, params = {}) {
   if (!bridge) {
     throw new Error("AstrBot 页面桥接未加载。");
   }
-  return responseData(await bridge.apiGet(endpoint, params));
+  return unwrap(await bridge.apiGet(endpoint, params));
 }
 
 async function apiPost(endpoint, body) {
   if (!bridge) {
     throw new Error("AstrBot 页面桥接未加载。");
   }
-  return responseData(await bridge.apiPost(endpoint, body));
+  return unwrap(await bridge.apiPost(endpoint, body));
 }
 
-function formatBytes(bytes) {
-  const amount = Number(bytes) || 0;
-  if (amount < 1024) {
-    return `${amount} B`;
+/* --- 提示条 -------------------------------------------------------------- */
+
+function toast(text, kind = "ok") {
+  const node = make("div", "toast");
+  node.dataset.kind = kind;
+  node.append(icon(kind === "error" ? "i-alert" : "i-check", 15), make("span", "", text));
+  dom.toastStack.append(node);
+  window.setTimeout(() => {
+    node.classList.add("is-out");
+    window.setTimeout(() => node.remove(), 260);
+  }, 3200);
+  while (dom.toastStack.children.length > 4) {
+    dom.toastStack.firstElementChild?.remove();
   }
-  if (amount < 1024 * 1024) {
-    return `${(amount / 1024).toFixed(1)} KB`;
+}
+
+function setStatus(text, kind = "ok") {
+  dom.statusText.textContent = text;
+  dom.statusPill.classList.remove("is-ok", "is-warn", "is-error");
+  dom.statusPill.classList.add("is-" + kind);
+}
+
+/* --- 主题 ---------------------------------------------------------------- */
+
+const systemDark = window.matchMedia?.("(prefers-color-scheme: dark)");
+
+function resolveTheme(mode) {
+  if (mode === "light" || mode === "dark") {
+    return mode;
   }
-  return `${(amount / 1024 / 1024).toFixed(1)} MB`;
+  return systemDark && !systemDark.matches ? "light" : "dark";
 }
 
-function formatDate(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value || "--";
+function applyThemeMode(mode, persist = true) {
+  state.themeMode = ["system", "light", "dark"].includes(mode) ? mode : "system";
+  document.documentElement.dataset.theme = resolveTheme(state.themeMode);
+  for (const button of dom.themeButtons) {
+    button.setAttribute("aria-selected", String(button.dataset.themeMode === state.themeMode));
   }
-  return new Intl.DateTimeFormat("zh-CN", {
-    dateStyle: "short",
-    timeStyle: "short",
-  }).format(date);
+  if (!persist) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, state.themeMode);
+  } catch {
+    // 隐私模式或嵌入式 Dashboard 可能禁用 localStorage。
+  }
 }
 
-function textList(values, fallback = "--") {
-  const result = Array.isArray(values)
-    ? values.map((value) => String(value).trim()).filter(Boolean)
-    : [];
-  return result.length ? result.join("、") : fallback;
+/* --- 视图切换 ------------------------------------------------------------ */
+
+function viewFromHash() {
+  const hash = String(window.location.hash || "").replace(/^#\/?/, "");
+  return VIEWS.includes(hash) ? hash : "overview";
 }
 
-function keyGlyph(key) {
-  const normalized = String(key || "MF").replace(/[^\p{L}\p{N}]/gu, "");
-  return (normalized.slice(0, 2) || "MF").toUpperCase();
+function setView(view, { syncHash = true } = {}) {
+  const target = VIEWS.includes(view) ? view : "overview";
+  state.view = target;
+  for (const panel of dom.panels) {
+    panel.hidden = panel.dataset.viewPanel !== target;
+  }
+  for (const item of dom.navItems) {
+    const isActive = item.dataset.viewTarget === target;
+    if (item.classList.contains("nav-item")) {
+      item.classList.toggle("is-active", isActive);
+      if (isActive) {
+        item.setAttribute("aria-current", "page");
+      } else {
+        item.removeAttribute("aria-current");
+      }
+    }
+  }
+  dom.viewKicker.textContent = VIEW_INFO[target].kicker;
+  dom.viewTitle.textContent = VIEW_INFO[target].title;
+  if (syncHash && viewFromHash() !== target) {
+    window.location.hash = "#" + target;
+  }
+}
+
+/* --- 概览渲染 ------------------------------------------------------------ */
+
+function renderOverview() {
+  const data = state.overview;
+  dom.engineVersion.textContent = data?.engine_version || "--";
+  dom.heroTotal.textContent = data ? formatNumber(data.total_memes) : "--";
+  dom.navLibraryCount.textContent = data ? formatCompact(data.total_memes) : "--";
+  dom.navRecordsCount.textContent = data ? formatCompact(data.usage_records) : "--";
+  dom.navLibraryCount.title = data ? formatNumber(data.total_memes) + " 个表情" : "";
+  dom.navRecordsCount.title = data ? formatNumber(data.usage_records) + " 条记录" : "";
+
+  clear(dom.heroMeta);
+  if (data) {
+    const prefix = String(data.trigger_prefix || "meme");
+    dom.heroMeta.append(
+      chip("引擎 " + (data.engine_version || "--"), "is-mono"),
+      chip("前缀 /" + prefix, "is-mono is-primary"),
+      chip(formatNumber(data.enabled_memes) + " 个可用", "is-secondary"),
+    );
+  }
+
+  renderSourceBar(data?.sources || [], data?.total_memes || 0);
+  renderMetricTiles(data);
+  renderExtensions(data);
+  renderTopMemes(data?.top_memes || []);
+  renderActiveSessions(data?.active_conversations || []);
+  renderRecentActivity(data?.recent_records || []);
+}
+
+function chip(text, extra = "") {
+  return make("span", ("chip " + extra).trim(), text);
+}
+
+function renderSourceBar(sources, total) {
+  clear(dom.sourceBar);
+  clear(dom.sourceLegend);
+  if (!sources.length) {
+    dom.sourceLegend.append(make("span", "region-message", "暂无来源数据。"));
+    return;
+  }
+  const sum = sources.reduce((carry, item) => carry + (Number(item.count) || 0), 0) || total || 1;
+  for (const entry of sources) {
+    const bar = make("span");
+    bar.dataset.source = entry.source;
+    bar.style.flexBasis = ((Number(entry.count) || 0) / sum) * 100 + "%";
+    bar.style.flexGrow = "0";
+    dom.sourceBar.append(bar);
+
+    const button = make("button");
+    button.type = "button";
+    const swatch = make("span", "legend-swatch");
+    swatch.dataset.source = entry.source;
+    button.append(
+      swatch,
+      make("span", "", sourceLabel(entry.source)),
+      make("span", "legend-value", formatNumber(entry.count)),
+    );
+    button.title = "在表情库中只看" + sourceLabel(entry.source);
+    button.addEventListener("click", () => {
+      state.filters.source = entry.source;
+      setView("library");
+      void loadCatalog({ resetOffset: true });
+    });
+    dom.sourceLegend.append(button);
+  }
+}
+
+function tile(label, value, note, accent, ratio) {
+  const node = make("div", "tile");
+  if (accent) {
+    node.dataset.accent = accent;
+  }
+  node.append(make("span", "tile-label", label), make("strong", "tile-value", value));
+  // ratio 为数字时画占比条；为 null 时画一条统一的装饰条，让四块指标视觉对齐。
+  if (ratio !== undefined) {
+    const flat = ratio === null;
+    const meter = make("div", flat ? "meter is-flat" : "meter");
+    const fill = make("i");
+    fill.style.width = flat ? "100%" : Math.max(0, Math.min(100, Number(ratio) * 100)).toFixed(1) + "%";
+    meter.append(fill);
+    node.append(meter);
+  }
+  if (note) {
+    node.append(make("span", "tile-note", note));
+  }
+  return node;
+}
+
+function renderMetricTiles(data) {
+  clear(dom.metricTiles);
+  if (!data) {
+    dom.metricTiles.append(skeleton(4));
+    return;
+  }
+  const total = Number(data.total_memes) || 0;
+  const enabled = Number(data.enabled_memes) || 0;
+  const disabled = Number(data.disabled_memes) || 0;
+  dom.metricTiles.append(
+    tile("已启用", formatNumber(enabled), "可被指令触发", "", total ? enabled / total : 0),
+    tile("已禁用", formatNumber(disabled), "可随时单独恢复", "danger", total ? disabled / total : 0),
+    tile("生成记录", formatNumber(data.usage_records), "仅统计文本信息，不含图片", "secondary", null),
+    tile("标签数量", formatNumber(data.tag_count), "用于筛选表情主题", "accent", null),
+  );
+}
+
+function extensionRow(title, ready, warn, description) {
+  const row = make("div", "ext-row");
+  if (ready) {
+    row.classList.add("is-ready");
+  } else if (warn) {
+    row.classList.add("is-warn");
+  }
+  const iconBox = make("span", "ext-icon");
+  iconBox.append(icon(ready ? "i-check" : warn ? "i-alert" : "i-puzzle", 16));
+  const copy = make("div", "ext-copy");
+  copy.append(make("strong", "", title), make("small", "", description));
+  row.append(iconBox, copy, chip(ready ? "就绪" : warn ? "待修复" : "未安装", ready ? "is-primary" : warn ? "is-accent" : ""));
+  return row;
+}
+
+function renderExtensions(data) {
+  clear(dom.extensionList);
+  if (!data) {
+    dom.extensionList.append(skeleton(2, true));
+    return;
+  }
+  const ext = data.extension || {};
+  const gouqi = data.gouqi_extension || {};
+
+  const extReady = Boolean(ext.installed && ext.library_valid && ext.resources_present);
+  const extWarn = Boolean(ext.installed && !extReady);
+  const extNote = ext.installed
+    ? [ext.tag ? "版本 " + ext.tag : "版本未知", ext.library_valid ? "清单正常" : "清单异常", ext.resources_present ? "素材完整" : "素材缺失"].join(" · ")
+    : "未安装，可在插件配置中启用后自动下载";
+  dom.extensionList.append(extensionRow("meme_emoji 扩展", extReady, extWarn, extNote));
+
+  const gouqiReady = Boolean(gouqi.installed && gouqi.assets_valid);
+  const gouqiWarn = Boolean(gouqi.installed && !gouqiReady);
+  const gouqiNote = gouqi.installed
+    ? [gouqi.commit ? "commit " + String(gouqi.commit).slice(0, 7) : "commit 未知", formatNumber(gouqi.templates) + " 个模板", gouqi.assets_valid ? "素材完整" : "素材缺失"].join(" · ")
+    : "未安装，可在插件配置中启用后自动下载";
+  dom.extensionList.append(extensionRow("枸杞扩展", gouqiReady, gouqiWarn, gouqiNote));
+}
+
+function rankRow(index, title, subtitle, value, ratio, onOpen) {
+  const row = make(onOpen ? "button" : "div", "rank-row");
+  if (onOpen) {
+    row.type = "button";
+    row.addEventListener("click", onOpen);
+  }
+  row.style.setProperty("--fill", Math.max(0, Math.min(100, ratio * 100)).toFixed(1) + "%");
+  const copy = make("div", "rank-copy");
+  copy.append(make("strong", "", title), make("small", "", subtitle));
+  row.append(make("span", "rank-index", String(index).padStart(2, "0")), copy, make("span", "rank-value", value));
+  return row;
+}
+
+function renderTopMemes(items) {
+  clear(dom.topMemes);
+  if (!items.length) {
+    dom.topMemes.append(emptyState("还没有生成记录", "触发一次表情后，这里会显示最常用的模板。"));
+    return;
+  }
+  const max = Math.max(...items.map((item) => Number(item.count) || 0), 1);
+  items.forEach((item, index) => {
+    dom.topMemes.append(
+      rankRow(
+        index + 1,
+        item.key,
+        "最近触发词 " + (item.last_trigger || item.key) + " · " + relativeTime(item.last_used_at),
+        formatNumber(item.count) + " 次",
+        (Number(item.count) || 0) / max,
+        () => void openDetail(item.key),
+      ),
+    );
+  });
+}
+
+function renderActiveSessions(items) {
+  clear(dom.activeSessions);
+  if (!items.length) {
+    dom.activeSessions.append(emptyState("暂无活跃会话", "有人使用表情后，这里会显示所在会话。"));
+    return;
+  }
+  const max = Math.max(...items.map((item) => Number(item.count) || 0), 1);
+  items.forEach((item, index) => {
+    dom.activeSessions.append(
+      rankRow(
+        index + 1,
+        shortSession(item.session),
+        (item.platform || "未知平台") + " · 最近 " + (item.last_key || "--") + " · " + relativeTime(item.last_used_at),
+        formatNumber(item.count) + " 次",
+        (Number(item.count) || 0) / max,
+        () => {
+          state.session = item.session;
+          setView("records");
+          void loadHistory();
+        },
+      ),
+    );
+  });
+}
+
+function groupByDay(items) {
+  const groups = [];
+  let current = null;
+  for (const item of items) {
+    const label = formatDayLabel(item.created_at);
+    if (!current || current.label !== label) {
+      current = { label, items: [] };
+      groups.push(current);
+    }
+    current.items.push(item);
+  }
+  return groups;
+}
+
+function renderRecentActivity(items) {
+  clear(dom.recentActivity);
+  if (!items.length) {
+    dom.recentActivity.append(emptyState("暂无活动", "最近成功生成的表情会出现在这里。"));
+    return;
+  }
+  for (const group of groupByDay(items)) {
+    dom.recentActivity.append(make("p", "timeline-day", group.label));
+    for (const record of group.items) {
+      dom.recentActivity.append(timelineRow(record));
+    }
+  }
+}
+
+function timelineRow(record) {
+  const row = make("button", "timeline-row");
+  row.type = "button";
+  const copy = make("div", "timeline-copy");
+  copy.append(
+    make("strong", "", record.key + "  ·  " + (record.trigger || record.key)),
+    make("small", "", (record.sender_name || record.sender_id || "未知用户") + " @ " + shortSession(record.session)),
+  );
+  row.append(make("span", "timeline-time", formatTime(record.created_at)), copy, chip(record.platform || "--", "is-mono"));
+  row.title = "查看 " + record.key + " 详情";
+  row.addEventListener("click", () => void openDetail(record.key));
+  return row;
+}
+
+/* --- 表情库 -------------------------------------------------------------- */
+
+function renderSourceChips() {
+  clear(dom.sourceChips);
+  const sources = state.catalog.sources || [];
+  const total = sources.reduce((carry, item) => carry + (Number(item.count) || 0), 0);
+  if (sources.length < 2) {
+    dom.sourceChips.hidden = true;
+    return;
+  }
+  dom.sourceChips.hidden = false;
+  const entries = [
+    { source: "", label: "全部", count: total },
+    ...sources.map((item) => ({ source: item.source, label: sourceLabel(item.source), count: item.count })),
+  ];
+  for (const entry of entries) {
+    const button = make("button");
+    button.type = "button";
+    button.append(document.createTextNode(entry.label), make("b", "", formatNumber(entry.count)));
+    button.setAttribute("aria-pressed", String(state.filters.source === entry.source));
+    button.addEventListener("click", () => {
+      state.filters.source = entry.source;
+      void loadCatalog({ resetOffset: true });
+    });
+    dom.sourceChips.append(button);
+  }
+}
+
+function renderTagOptions() {
+  const current = state.filters.tag;
+  clear(dom.tagFilter);
+  const all = make("option", "", "全部标签");
+  all.value = "";
+  dom.tagFilter.append(all);
+  for (const tag of state.catalog.tags || []) {
+    const option = make("option", "", tag);
+    option.value = tag;
+    dom.tagFilter.append(option);
+  }
+  dom.tagFilter.value = (state.catalog.tags || []).includes(current) ? current : "";
+  state.filters.tag = dom.tagFilter.value;
+}
+
+function memeCard(item) {
+  const card = make("article", "meme-card");
+  card.style.setProperty("--hue", String(hueOf(item.key)));
+  card.dataset.key = item.key;
+  card.classList.toggle("is-off", !item.enabled);
+  card.classList.toggle("is-selected", state.selection.has(item.key));
+
+  const open = make("button", "meme-open");
+  open.type = "button";
+  open.setAttribute("aria-label", "查看 " + item.key + " 的详情");
+  open.addEventListener("click", () => {
+    if (state.selectMode) {
+      toggleSelection(item.key);
+      return;
+    }
+    void openDetail(item.key);
+  });
+
+  const glyph = make("span", "meme-glyph", glyphOf(item.key));
+  glyph.setAttribute("aria-hidden", "true");
+
+  const body = make("div", "meme-body");
+  body.append(make("span", "meme-key", item.key));
+  const keywords = (item.keywords || []).filter(Boolean);
+  body.append(make("span", "meme-keywords", keywords.length ? keywords.join(" · ") : "无触发关键词"));
+
+  const foot = make("div", "meme-foot");
+  const sourceBadge = make("span", "meme-badge");
+  sourceBadge.dataset.source = item.source;
+  sourceBadge.append(icon("i-puzzle", 11), make("span", "", sourceLabel(item.source)));
+  const needBadge = make("span", "meme-need");
+  needBadge.append(
+    icon("i-image", 11),
+    make("span", "", item.images?.label ?? "0"),
+    make("i"),
+    icon("i-text", 11),
+    make("span", "", item.texts?.label ?? "0"),
+  );
+  needBadge.title = "需要图片 " + (item.images?.label ?? "0") + " 张，文本 " + (item.texts?.label ?? "0") + " 段";
+  foot.append(sourceBadge, needBadge, make("span", "spacer"));
+
+  if (state.selectMode) {
+    const pick = make("button", "pick");
+    pick.type = "button";
+    pick.setAttribute("role", "checkbox");
+    pick.setAttribute("aria-checked", String(state.selection.has(item.key)));
+    pick.setAttribute("aria-label", "选择 " + item.key);
+    pick.append(icon("i-check", 12));
+    pick.addEventListener("click", () => toggleSelection(item.key));
+    foot.append(pick);
+  } else {
+    const toggle = make("button", "switch");
+    toggle.type = "button";
+    toggle.setAttribute("role", "switch");
+    toggle.setAttribute("aria-checked", String(item.enabled));
+    toggle.setAttribute("aria-label", (item.enabled ? "禁用 " : "启用 ") + item.key);
+    toggle.title = item.enabled ? "点击禁用" : "点击启用";
+    toggle.addEventListener("click", () => void setEnabled(item.key, !item.enabled, toggle));
+    foot.append(toggle);
+  }
+
+  card.append(open, glyph, body, foot);
+  return card;
+}
+
+function renderCatalog() {
+  const { items, total, offset, limit } = state.catalog;
+  dom.memeGrid.classList.toggle("is-list", state.layout === "list");
+  clear(dom.memeGrid);
+  if (!items.length) {
+    dom.memeGrid.append(emptyState("没有匹配的表情", "换个关键词，或把筛选条件放宽一些。", "i-search"));
+  } else {
+    for (const item of items) {
+      dom.memeGrid.append(memeCard(item));
+    }
+  }
+  dom.catalogCount.textContent = formatNumber(total) + " 个结果";
+  const from = total ? offset + 1 : 0;
+  const to = Math.min(offset + limit, total);
+  dom.pageStatus.textContent = total ? from + " - " + to + " / " + formatNumber(total) : "0 / 0";
+  dom.previousPage.disabled = offset <= 0;
+  dom.nextPage.disabled = offset + limit >= total;
+  renderBulkBar();
+}
+
+function renderBulkBar() {
+  const count = state.selection.size;
+  dom.bulkBar.classList.toggle("is-open", state.selectMode);
+  dom.bulkCount.textContent = String(count);
+  const busy = Boolean(state.bulkBusy);
+  dom.bulkEnable.disabled = busy || count === 0;
+  dom.bulkDisable.disabled = busy || count === 0;
+  dom.bulkClear.disabled = busy || count === 0;
+  const pageKeys = state.catalog.items.map((item) => item.key);
+  const allPicked = pageKeys.length > 0 && pageKeys.every((key) => state.selection.has(key));
+  dom.bulkSelectPage.disabled = busy || pageKeys.length === 0;
+  dom.bulkSelectPage.textContent = allPicked ? "取消本页" : "本页全选";
+}
+
+function togglePageSelection() {
+  const pageKeys = state.catalog.items.map((item) => item.key);
+  if (!pageKeys.length) {
+    return;
+  }
+  if (pageKeys.every((key) => state.selection.has(key))) {
+    for (const key of pageKeys) {
+      state.selection.delete(key);
+    }
+  } else {
+    let truncated = false;
+    for (const key of pageKeys) {
+      if (state.selection.size >= BULK_LIMIT && !state.selection.has(key)) {
+        truncated = true;
+        continue;
+      }
+      state.selection.add(key);
+    }
+    if (truncated) {
+      toast("单次最多选择 " + BULK_LIMIT + " 个表情，已选到上限。", "error");
+    }
+  }
+  renderCatalog();
+}
+
+function toggleSelection(key) {
+  if (state.selection.has(key)) {
+    state.selection.delete(key);
+  } else {
+    if (state.selection.size >= BULK_LIMIT) {
+      toast("单次最多选择 " + BULK_LIMIT + " 个表情。", "error");
+      return;
+    }
+    state.selection.add(key);
+  }
+  renderCatalog();
+}
+
+function setSelectMode(enabled) {
+  state.selectMode = enabled;
+  dom.selectModeButton.setAttribute("aria-pressed", String(enabled));
+  dom.selectModeButton.classList.toggle("is-primary", enabled);
+  if (!enabled) {
+    state.selection.clear();
+  }
+  renderCatalog();
+}
+
+/* --- 详情抽屉 ------------------------------------------------------------ */
+
+let lastFocused = null;
+
+function openDrawer(key) {
+  lastFocused = document.activeElement;
+  dom.drawerTitle.textContent = key;
+  dom.drawerEyebrow.textContent = "MEME DETAIL";
+  dom.drawer.hidden = false;
+  dom.drawerPanel.focus({ preventScroll: true });
+}
+
+function closeDrawer() {
+  dom.drawer.hidden = true;
+  state.detailKey = "";
+  state.detail = null;
+  clear(dom.drawerBody);
+  if (lastFocused instanceof HTMLElement) {
+    lastFocused.focus({ preventScroll: true });
+  }
+}
+
+async function openDetail(key) {
+  const target = String(key || "").trim();
+  if (!target) {
+    return;
+  }
+  state.detailKey = target;
+  openDrawer(target);
+  clear(dom.drawerBody);
+  dom.drawerBody.append(skeleton(3, true));
+  const requestId = ++state.requests.detail;
+  try {
+    const data = await apiGet("dashboard/meme", { key: target });
+    if (requestId !== state.requests.detail) {
+      return;
+    }
+    state.detail = data.item;
+    renderDetail(data.item);
+  } catch (error) {
+    if (requestId !== state.requests.detail) {
+      return;
+    }
+    clear(dom.drawerBody);
+    const message = make("p", "region-message is-error", error.message || "读取详情失败。");
+    dom.drawerBody.append(message);
+  }
+}
+
+function commandPrefix() {
+  const prefix = String(state.overview?.trigger_prefix ?? "meme").trim();
+  if (!prefix) {
+    return "/";
+  }
+  return "/" + prefix + (/[A-Za-z0-9]$/.test(prefix) ? " " : "");
+}
+
+function commandExamples(detail) {
+  const trigger = (detail.keywords || []).find(Boolean) || detail.key;
+  const needImages = Number(detail.images?.min) || 0;
+  const needTexts = Number(detail.texts?.min) || 0;
+  const hints = [];
+  if (needImages) {
+    hints.push("需要 " + (detail.images?.label ?? needImages) + " 张图片（可 @ 某人、引用消息或直接发图）");
+  }
+  if (needTexts) {
+    hints.push("需要 " + (detail.texts?.label ?? needTexts) + " 段文本");
+  }
+  const examples = [];
+  const base = trigger + (needTexts ? " " + (detail.default_texts || []).slice(0, needTexts).map((text) => text || "文本").join(" ") : "");
+  examples.push({ command: base, hint: hints.join("，") || "直接发送即可生成" });
+  examples.push({ command: commandPrefix() + base, hint: "带插件前缀的等价写法，适合关键词冲突时使用" });
+
+  const options = detail.options || [];
+  const bareOption = options.find((option) => (option.aliases || []).length);
+  if (bareOption) {
+    examples.push({
+      command: trigger + " " + bareOption.aliases[0],
+      hint: "直接跟上选项名即可，例如「" + bareOption.name + "」的可选值：" + (bareOption.choices || []).join("、"),
+    });
+  }
+  const flagOption = options.find((option) => (option.flags || []).length);
+  if (flagOption) {
+    const flag = flagOption.flags[0];
+    examples.push({
+      command: trigger + " " + (flagOption.type === "bool" ? flag : flag + " " + (formatOptionDefault(flagOption.default) === "未设置" ? "值" : formatOptionDefault(flagOption.default))),
+      hint: "使用参数开关：" + (flagOption.description || flagOption.name),
+    });
+  }
+  return examples;
 }
 
 function formatOptionDefault(value) {
@@ -161,708 +933,792 @@ function formatOptionDefault(value) {
   return String(value);
 }
 
-function commandPrefix() {
-  const prefix = String(state.overview?.trigger_prefix ?? "meme").trim();
-  return prefix ? `/${prefix}${/[A-Za-z0-9]$/.test(prefix) ? " " : ""}` : "/";
+function section(title) {
+  const node = make("section", "detail-section");
+  node.append(make("h3", "", title));
+  return node;
 }
 
-function commandFor(detail) {
-  const trigger = detail.keywords?.[0] || detail.key;
-  const optionExamples = (detail.options || [])
-    .slice(0, 2)
-    .map((option) => {
-      const flag = option.flags?.[0] || `--${option.name}`;
-      return option.type === "bool" ? flag : `${flag} <${option.name}>`;
-    });
-  return `${commandPrefix()}${trigger}${optionExamples.length ? ` ${optionExamples.join(" ")}` : ""}`;
-}
-
-function normalizedView(value) {
-  return Object.hasOwn(VIEW_INFO, value) ? value : "overview";
-}
-
-function viewFromHash() {
-  return normalizedView(window.location.hash.replace(/^#/, ""));
-}
-
-function renderViewHeader() {
-  const detail = VIEW_INFO[state.activeView];
-  elements.viewKicker.textContent = detail.kicker;
-  elements.viewTitle.textContent = detail.title;
-  elements.viewDescription.textContent = detail.description;
-  document.title = `Meme 工坊 · ${detail.title}`;
-}
-
-function setActiveView(view, { syncHash = true } = {}) {
-  const nextView = normalizedView(view);
-  state.activeView = nextView;
-  for (const item of elements.navItems) {
-    const selected = item.dataset.viewTarget === nextView;
-    item.classList.toggle("is-active", selected);
-    item.setAttribute("aria-current", selected ? "page" : "false");
+function commandLine(example) {
+  const line = make("div", "command-line");
+  const code = make("code");
+  code.append(document.createTextNode(example.command));
+  if (example.hint) {
+    code.append(make("span", "command-hint", example.hint));
   }
-  for (const panel of elements.viewPanels) {
-    panel.hidden = panel.dataset.viewPanel !== nextView;
-  }
-  renderViewHeader();
-  if (syncHash && window.location.hash !== `#${nextView}`) {
-    window.location.hash = nextView;
+  const copy = make("button", "btn is-icon is-quiet");
+  copy.type = "button";
+  copy.title = "复制命令";
+  copy.setAttribute("aria-label", "复制命令 " + example.command);
+  copy.append(icon("i-copy", 15));
+  copy.addEventListener("click", () => void copyText(example.command));
+  line.append(code, copy);
+  return line;
+}
+
+async function copyText(text) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const area = make("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "readonly");
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.append(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+    }
+    toast("已复制：" + text);
+  } catch {
+    toast("复制失败，请手动选择文本。", "error");
   }
 }
 
-function updateTagOptions(tags) {
-  const previous = elements.tagFilter.value;
-  const select = elements.tagFilter;
-  select.replaceChildren();
-  select.append(createOption("", "全部标签"));
-  for (const tag of tags) {
-    select.append(createOption(tag, tag));
-  }
-  select.value = tags.includes(previous) ? previous : "";
-}
-
-function createOption(value, label) {
-  const option = document.createElement("option");
-  option.value = value;
-  option.textContent = label;
-  return option;
-}
-
-function renderSummaryEmpty(container, text) {
-  container.replaceChildren(createElement("p", "empty-summary", text));
-}
-
-function renderTopMemes(items) {
-  const list = elements.topMemes;
-  list.replaceChildren();
-  if (!items.length) {
-    renderSummaryEmpty(list, "暂无成功生成记录。");
-    return;
-  }
-  for (const [index, item] of items.entries()) {
-    const row = createElement("button", "summary-row");
-    row.type = "button";
-    row.title = `查看 ${item.key} 的详情`;
-    const rank = createElement("span", "summary-rank", String(index + 1).padStart(2, "0"));
-    const content = createElement("span", "summary-content");
-    content.append(
-      createElement("strong", "", item.key),
-      createElement("small", "", item.last_trigger || "--"),
-    );
-    const metric = createElement("span", "summary-metric", `${item.count} 次`);
-    row.append(rank, content, metric);
-    row.addEventListener("click", () => void openMeme(item.key));
-    list.append(row);
-  }
-}
-
-function renderConversations(items) {
-  const list = elements.activeConversations;
-  list.replaceChildren();
-  if (!items.length) {
-    renderSummaryEmpty(list, "暂无会话活动。");
-    return;
-  }
-  for (const item of items) {
-    const row = createElement("button", "summary-row conversation-row");
-    row.type = "button";
-    row.title = "查看此会话的最近记录";
-    const content = createElement("span", "summary-content");
-    content.append(
-      createElement("strong", "", item.last_sender_name || item.session || "--"),
-      createElement("small", "", item.session || "--"),
-    );
-    const metric = createElement("span", "summary-metric", `${item.count} 次`);
-    row.append(content, metric);
-    row.addEventListener("click", () => void openConversation(item.session));
-    list.append(row);
-  }
-}
-
-function renderRecentActivity(items) {
-  const list = elements.recentActivity;
-  list.replaceChildren();
-  if (!items.length) {
-    renderSummaryEmpty(list, "暂无成功生成记录。");
-    return;
-  }
-  for (const item of items) {
-    const row = createElement("button", "activity-row");
-    row.type = "button";
-    row.title = "查看此会话的最近记录";
-    const primary = createElement("span", "activity-primary");
-    primary.append(
-      createElement("strong", "", item.trigger || item.key || "--"),
-      createElement("small", "", `${item.sender_name || item.sender_id || "--"} · ${item.key || "--"}`),
-    );
-    const secondary = createElement("span", "activity-secondary");
-    secondary.append(
-      createElement("time", "", formatDate(item.created_at)),
-      createElement("small", "", item.session || "--"),
-    );
-    row.append(primary, secondary);
-    row.addEventListener("click", () => void openConversation(item.session));
-    list.append(row);
-  }
-}
-
-function renderOverview() {
-  const data = state.overview;
-  if (!data) {
-    renderTopMemes([]);
-    renderConversations([]);
-    renderRecentActivity([]);
-    return;
-  }
-  elements.metricTotal.textContent = data.total_memes;
-  elements.metricEnabled.textContent = data.enabled_memes;
-  elements.metricDisabled.textContent = data.disabled_memes;
-  elements.metricHistory.textContent = data.usage_records;
-
-  const extension = data.extension || {};
-  const emojiStatus = extension.installed
-    ? `meme_emoji 扩展已安装${extension.tag ? ` (${extension.tag})` : ""}`
-    : "meme_emoji 扩展未安装";
-  const emojiReady = extension.installed && extension.library_valid && extension.resources_present;
-  const gouqi = data.gouqi_extension || {};
-  const gouqiStatus = gouqi.installed
-    ? `Gouqi 扩展已安装${gouqi.commit ? ` (${String(gouqi.commit).slice(0, 12)})` : ""}`
-    : "Gouqi 扩展未安装";
-  const gouqiReady = gouqi.installed && gouqi.assets_valid;
-  const statuses = [
-    emojiReady ? `${emojiStatus}，运行资源可用` : extension.installed ? `${emojiStatus}，请检查动态库与资源状态` : emojiStatus,
-    gouqiReady ? `${gouqiStatus}，已加载 ${gouqi.templates || 0} 个模板` : gouqi.installed ? `${gouqiStatus}，请检查素材状态` : gouqiStatus,
-  ];
-  const hasWarning = (extension.installed && !emojiReady) || (gouqi.installed && !gouqiReady);
-  elements.extensionState.textContent = statuses.join("；");
-  elements.extensionState.classList.toggle("is-ready", !hasWarning && (emojiReady || gouqiReady));
-  elements.extensionState.classList.toggle("is-warning", hasWarning);
-
-  renderTopMemes(data.top_memes || []);
-  renderConversations(data.active_conversations || []);
-  renderRecentActivity(data.recent_records || []);
-}
-
-function renderCatalog() {
-  const { items, total } = state.catalog;
-  const list = elements.memeList;
-  list.replaceChildren();
-  elements.catalogCount.textContent = `${total} 个`;
-
-  if (!items.length) {
-    list.append(createElement("p", "region-message", "没有符合筛选条件的表情包。"));
-  }
-
-  for (const item of items) {
-    const row = createElement("article", "meme-row");
-    row.classList.toggle("is-disabled", !item.enabled);
-    row.classList.toggle("is-selected", item.key === state.selectedKey);
-    row.tabIndex = 0;
-    row.setAttribute("role", "button");
-    row.setAttribute("aria-label", `查看 ${item.key} 的详情`);
-
-    const glyph = createElement("div", "meme-glyph", keyGlyph(item.key));
-    glyph.setAttribute("aria-hidden", "true");
-    const main = createElement("div", "meme-main");
-    main.append(
-      createElement("span", "meme-name", item.key),
-      createElement("span", "meme-keywords", textList(item.keywords, "无关键词")),
-    );
-
-    const controls = createElement("div", "meme-controls");
-    controls.append(createElement("span", "state-label", item.enabled ? "已启用" : "已禁用"));
-    const toggle = document.createElement("input");
-    toggle.className = "switch-input";
-    toggle.type = "checkbox";
-    toggle.checked = Boolean(item.enabled);
-    toggle.setAttribute("aria-label", `${item.key} ${item.enabled ? "已启用，点击禁用" : "已禁用，点击启用"}`);
-    toggle.addEventListener("click", (event) => event.stopPropagation());
-    toggle.addEventListener("change", async () => {
-      await toggleMeme(item.key, toggle.checked, toggle);
-    });
-    controls.append(toggle);
-    row.append(glyph, main, controls);
-    row.addEventListener("click", () => void showDetail(item.key));
-    row.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        void showDetail(item.key);
-      }
-    });
-    list.append(row);
-  }
-
-  const page = Math.floor(state.offset / PAGE_SIZE) + 1;
-  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  elements.pageStatus.textContent = `${page} / ${pages}`;
-  elements.previousPage.disabled = state.offset <= 0;
-  elements.nextPage.disabled = state.offset + PAGE_SIZE >= total;
-}
-
-function makeDetailBadge(label, value, className = "") {
-  const badge = createElement("span", `detail-badge ${className}`.trim());
-  badge.append(createElement("strong", "", label));
-  badge.append(document.createTextNode(value));
-  return badge;
-}
-
-function makeDetailBlock(title) {
-  const block = createElement("section", "detail-block");
-  block.append(createElement("h3", "", title));
-  return block;
-}
-
-function renderOption(option) {
-  const row = createElement("div", "option-row");
-  const head = createElement("div", "option-head");
-  head.append(
-    createElement("code", "option-name", option.name || "--"),
-    createElement("span", "option-type", option.type || "unknown"),
-  );
-  row.append(head);
-  if (option.description) {
-    row.append(createElement("p", "option-description", option.description));
-  }
-  const values = createElement("p", "option-values");
-  const descriptors = [];
-  if (option.flags?.length) {
-    descriptors.push(`参数 ${option.flags.join(" / ")}`);
-  }
-  if (option.aliases?.length) {
-    descriptors.push(`别名 ${option.aliases.join(" / ")}`);
-  }
-  if (option.choices?.length) {
-    descriptors.push(`可选 ${option.choices.join(" / ")}`);
-  }
-  if (option.minimum !== null && option.minimum !== undefined) {
-    descriptors.push(`最小 ${option.minimum}`);
-  }
-  if (option.maximum !== null && option.maximum !== undefined) {
-    descriptors.push(`最大 ${option.maximum}`);
-  }
-  descriptors.push(`默认 ${formatOptionDefault(option.default)}`);
-  values.textContent = descriptors.join(" · ");
-  row.append(values);
-  return row;
+function specCell(label, value) {
+  const cell = make("div", "spec-cell");
+  cell.append(make("dt", "", label), make("dd", "", value));
+  return cell;
 }
 
 function renderDetail(detail) {
-  const root = createElement("div", "detail-content");
-  const heading = createElement("div", "detail-title-row");
-  const headingText = createElement("div");
-  headingText.append(
-    createElement("p", "eyebrow", "TEMPLATE DETAIL"),
-    createElement("h2", "", detail.key),
+  clear(dom.drawerBody);
+  dom.drawerTitle.textContent = detail.key;
+  dom.drawerEyebrow.textContent = sourceLabel(detail.source).toUpperCase() + " · MEME DETAIL";
+
+  // 状态与开关
+  const statusSection = section("状态");
+  const statusRow = make("div", "detail-row");
+  const toggle = make("button", "switch");
+  toggle.type = "button";
+  toggle.setAttribute("role", "switch");
+  toggle.setAttribute("aria-checked", String(detail.enabled));
+  toggle.setAttribute("aria-label", (detail.enabled ? "禁用 " : "启用 ") + detail.key);
+  toggle.addEventListener("click", () => void setEnabled(detail.key, !detail.enabled, toggle));
+  statusRow.append(
+    chip(detail.enabled ? "已启用" : "已禁用", detail.enabled ? "is-primary" : "is-danger"),
+    chip(sourceLabel(detail.source), "is-secondary"),
+    make("span", "", detail.enabled ? "当前可被触发" : "当前不响应任何触发词"),
+    toggle,
   );
-  const toggle = document.createElement("input");
-  toggle.className = "switch-input";
-  toggle.type = "checkbox";
-  toggle.checked = Boolean(detail.enabled);
-  toggle.setAttribute("aria-label", `${detail.key} ${detail.enabled ? "已启用，点击禁用" : "已禁用，点击启用"}`);
-  toggle.addEventListener("change", async () => {
-    await toggleMeme(detail.key, toggle.checked, toggle);
-  });
-  heading.append(headingText, toggle);
-  root.append(heading);
+  statusSection.append(statusRow);
 
-  const meta = createElement("div", "detail-meta");
-  const sourceLabels = {
-    external: "原生外部扩展",
-    gouqi: "Gouqi 扩展",
-    meme_generator: "meme_generator",
-  };
-  meta.append(
-    makeDetailBadge("来源", sourceLabels[detail.source] || detail.source || "未知"),
-    makeDetailBadge("图片", detail.images?.label || "0"),
-    makeDetailBadge("文本", detail.texts?.label || "0"),
-    makeDetailBadge("状态", detail.enabled ? "已启用" : "已禁用", detail.enabled ? "is-enabled" : "is-disabled"),
+  const specs = make("dl", "spec-grid");
+  specs.append(
+    specCell("图片需求", detail.images?.label ?? "0"),
+    specCell("文本需求", detail.texts?.label ?? "0"),
+    specCell("可选参数", formatNumber((detail.options || []).length)),
+    specCell("内置素材", detail.has_materials ? formatNumber(detail.materials?.total || 0) : "无"),
   );
-  root.append(meta);
+  statusSection.append(specs);
+  dom.drawerBody.append(statusSection);
 
-  const commandBlock = makeDetailBlock("调用与参数");
-  commandBlock.append(createElement("pre", "command-preview", commandFor(detail)));
-  root.append(commandBlock);
-
-  const previewBlock = makeDetailBlock("预览");
-  const previewFrame = createElement("div", "preview-frame");
-  previewFrame.append(createElement("span", "", "等待生成预览"));
-  const previewButton = createElement("button", "preview-button", "生成预览");
-  previewButton.type = "button";
-  previewButton.addEventListener("click", () => void loadPreview(detail.key, previewFrame, previewButton));
-  previewBlock.append(previewFrame, previewButton);
-  root.append(previewBlock);
-
-  if (detail.default_texts?.length) {
-    const defaultsBlock = makeDetailBlock("默认文本");
-    defaultsBlock.append(createElement("p", "option-description", textList(detail.default_texts)));
-    root.append(defaultsBlock);
-  }
-
-  const optionsBlock = makeDetailBlock("可传选项");
-  const optionList = createElement("div", "option-list");
-  if (detail.options?.length) {
-    for (const option of detail.options) {
-      optionList.append(renderOption(option));
+  // 触发词
+  const triggerSection = section("触发词");
+  const triggers = make("div", "tag-list");
+  const keywords = (detail.keywords || []).filter(Boolean);
+  if (keywords.length) {
+    for (const keyword of keywords) {
+      const item = make("button", "chip is-mono");
+      item.type = "button";
+      item.textContent = keyword;
+      item.title = "复制触发词";
+      item.addEventListener("click", () => void copyText(keyword));
+      triggers.append(item);
     }
   } else {
-    optionList.append(createElement("p", "option-description", "该表情没有额外可传选项。"));
+    triggers.append(make("span", "region-message", "该表情没有关键词，只能用 " + commandPrefix() + detail.key + " 触发。"));
   }
-  optionsBlock.append(optionList);
-  root.append(optionsBlock);
+  triggerSection.append(triggers);
+  if ((detail.tags || []).length) {
+    const tags = make("div", "tag-list");
+    for (const tag of detail.tags) {
+      const item = make("button", "chip");
+      item.type = "button";
+      item.append(icon("i-tag", 12), make("span", "", tag));
+      item.title = "在表情库中按此标签筛选";
+      item.addEventListener("click", () => {
+        state.filters.tag = tag;
+        state.filters.q = "";
+        dom.search.value = "";
+        closeDrawer();
+        setView("library");
+        void loadCatalog({ resetOffset: true });
+      });
+      tags.append(item);
+    }
+    triggerSection.append(tags);
+  }
+  dom.drawerBody.append(triggerSection);
 
-  if (detail.keywords?.length || detail.tags?.length) {
-    const tagBlock = makeDetailBlock("关键词与标签");
-    const tags = createElement("div", "tag-list");
-    for (const keyword of detail.keywords || []) {
-      tags.append(createElement("span", "tag", keyword));
+  // 命令示例
+  const commandSection = section("命令示例");
+  const block = make("div", "command-block");
+  for (const example of commandExamples(detail)) {
+    block.append(commandLine(example));
+  }
+  commandSection.append(block);
+  dom.drawerBody.append(commandSection);
+
+  // 预览
+  const previewSection = section("效果预览");
+  const frame = make("div", "preview-frame");
+  frame.append(make("p", "region-message", "正在生成预览..."));
+  previewSection.append(frame);
+  dom.drawerBody.append(previewSection);
+  void loadPreview(detail.key, frame);
+
+  // 参数
+  const options = detail.options || [];
+  if (options.length) {
+    const optionSection = section("可选参数 " + options.length);
+    const list = make("div", "option-list");
+    for (const option of options) {
+      list.append(optionRow(option));
     }
-    for (const tag of detail.tags || []) {
-      tags.append(createElement("span", "tag", `#${tag}`));
-    }
-    tagBlock.append(tags);
-    root.append(tagBlock);
+    optionSection.append(list);
+    dom.drawerBody.append(optionSection);
   }
 
-  const materials = detail.materials || { total: 0, items: [] };
-  const materialsBlock = makeDetailBlock("素材图片");
-  const materialHead = createElement("div", "material-head");
-  materialHead.append(
-    createElement("span", "material-count", materials.total ? `${materials.total} 个素材${materials.truncated ? "，当前显示前 60 个" : ""}` : "没有本地素材"),
-  );
-  materialsBlock.append(materialHead);
-  if (materials.items?.length) {
-    const materialList = createElement("div", "material-list");
-    for (const material of materials.items) {
-      const button = createElement("button", "material-button");
-      button.type = "button";
-      button.title = material.name;
-      button.append(
-        createElement("strong", "", material.name),
-        createElement("small", "", formatBytes(material.size)),
-      );
-      button.addEventListener("click", () => void loadMaterial(detail.key, material.name, previewFrame, button));
-      materialList.append(button);
+  // 默认文本
+  if ((detail.default_texts || []).length) {
+    const textSection = section("默认文本");
+    const list = make("div", "tag-list");
+    for (const text of detail.default_texts) {
+      list.append(chip(text, "is-mono"));
     }
-    materialsBlock.append(materialList);
+    textSection.append(list);
+    dom.drawerBody.append(textSection);
   }
-  root.append(materialsBlock);
 
-  elements.detailPane.replaceChildren(root);
+  // 素材
+  if (detail.has_materials && (detail.materials?.items || []).length) {
+    const materialSection = section("内置素材 " + formatNumber(detail.materials.total));
+    const grid = make("div", "material-grid");
+    for (const material of detail.materials.items) {
+      grid.append(materialThumb(detail.key, material));
+    }
+    materialSection.append(grid);
+    if (detail.materials.truncated) {
+      materialSection.append(make("p", "region-message", "素材较多，仅展示前 " + detail.materials.items.length + " 个。"));
+    }
+    dom.drawerBody.append(materialSection);
+    observeMaterials(grid);
+  }
 }
 
-function renderDetailLoading() {
-  const container = createElement("div", "detail-empty");
-  container.append(createElement("p", "eyebrow", "INSPECT"), createElement("p", "", "正在读取表情详情..."));
-  elements.detailPane.replaceChildren(container);
+function optionRow(option) {
+  const row = make("div", "option-row");
+  const head = make("div", "option-head");
+  head.append(make("strong", "", option.name), make("span", "option-type", option.type || "text"));
+  const flags = [...(option.flags || []), ...(option.aliases || [])].filter(Boolean);
+  if (flags.length) {
+    head.append(chip(flags.join(" / "), "is-mono"));
+  }
+  row.append(head);
+  if (option.description) {
+    row.append(make("p", "option-desc", option.description));
+  }
+  const meta = make("div", "option-meta");
+  meta.append(make("span", "", "默认 " + formatOptionDefault(option.default)));
+  if ((option.choices || []).length) {
+    meta.append(make("span", "", "可选 " + option.choices.join(" | ")));
+  }
+  if (option.minimum !== null && option.minimum !== undefined) {
+    meta.append(make("span", "", "最小 " + option.minimum));
+  }
+  if (option.maximum !== null && option.maximum !== undefined) {
+    meta.append(make("span", "", "最大 " + option.maximum));
+  }
+  row.append(meta);
+  return row;
 }
 
-function renderDetailError(message) {
-  const container = createElement("div", "detail-empty");
-  container.append(createElement("p", "eyebrow", "INSPECT"), createElement("p", "region-message is-error", message));
-  elements.detailPane.replaceChildren(container);
-}
-
-function setPreviewFrame(frame, dataUrl, error = "") {
-  frame.replaceChildren();
-  frame.classList.toggle("is-error", Boolean(error));
-  if (error) {
-    frame.append(createElement("span", "", error));
+async function loadPreview(key, frame) {
+  const cached = state.previewCache.get(key);
+  if (cached) {
+    fillPreview(frame, key, cached);
     return;
   }
-  const image = document.createElement("img");
+  try {
+    const data = await apiGet("dashboard/preview", { key });
+    if (state.detailKey !== key) {
+      return;
+    }
+    state.previewCache.set(key, data.data_url);
+    if (state.previewCache.size > 40) {
+      state.previewCache.delete(state.previewCache.keys().next().value);
+    }
+    fillPreview(frame, key, data.data_url);
+  } catch (error) {
+    if (state.detailKey !== key) {
+      return;
+    }
+    clear(frame);
+    frame.append(make("p", "region-message is-error", error.message || "预览生成失败。"));
+  }
+}
+
+function fillPreview(frame, key, dataUrl) {
+  clear(frame);
+  const image = make("img");
   image.src = dataUrl;
-  image.alt = "Meme 预览";
+  image.alt = key + " 的效果预览";
+  image.loading = "lazy";
+  image.addEventListener("click", () => openLightbox(dataUrl, key + " · 效果预览"));
   frame.append(image);
 }
 
-async function loadPreview(key, frame, button) {
-  button.disabled = true;
-  button.textContent = "正在生成...";
-  frame.classList.remove("is-error");
-  frame.replaceChildren(createElement("span", "", "正在生成预览..."));
-  try {
-    const data = await apiGet("dashboard/preview", { key });
-    setPreviewFrame(frame, data.data_url);
-  } catch (error) {
-    setPreviewFrame(frame, "", error.message || "预览生成失败。");
-  } finally {
-    button.disabled = false;
-    button.textContent = "重新生成预览";
+function materialThumb(key, material) {
+  const button = make("button", "material-thumb is-loading");
+  button.type = "button";
+  button.dataset.key = key;
+  button.dataset.name = material.name;
+  button.title = material.name + " · " + formatBytes(material.size);
+  button.setAttribute("aria-label", "查看素材 " + material.name);
+  button.append(make("span", "material-name", material.name));
+  return button;
+}
+
+let materialObserver = null;
+const materialQueue = [];
+let materialActive = 0;
+
+function observeMaterials(grid) {
+  materialObserver?.disconnect();
+  materialObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) {
+          continue;
+        }
+        materialObserver?.unobserve(entry.target);
+        materialQueue.push(entry.target);
+        pumpMaterialQueue();
+      }
+    },
+    { root: dom.drawerBody, rootMargin: "160px" },
+  );
+  for (const thumb of grid.querySelectorAll(".material-thumb")) {
+    materialObserver.observe(thumb);
   }
 }
 
-async function loadMaterial(key, name, frame, button) {
-  const group = button.parentElement;
-  for (const child of group?.children || []) {
-    child.classList?.remove("is-selected");
-  }
-  button.classList.add("is-selected");
-  button.disabled = true;
-  frame.classList.remove("is-error");
-  frame.replaceChildren(createElement("span", "", "正在读取素材..."));
-  try {
-    const data = await apiGet("dashboard/material", { key, name });
-    setPreviewFrame(frame, data.data_url);
-  } catch (error) {
-    setPreviewFrame(frame, "", error.message || "素材读取失败。");
-  } finally {
-    button.disabled = false;
+function pumpMaterialQueue() {
+  while (materialActive < 3 && materialQueue.length) {
+    const target = materialQueue.shift();
+    materialActive += 1;
+    void loadMaterial(target).finally(() => {
+      materialActive -= 1;
+      pumpMaterialQueue();
+    });
   }
 }
 
-function updateHistorySessionOptions(conversations) {
-  const previous = elements.historySessionFilter.value;
-  elements.historySessionFilter.replaceChildren(createOption("", "全部会话"));
-  for (const conversation of conversations) {
-    const detail = `${conversation.session} · ${conversation.count} 次`;
-    elements.historySessionFilter.append(createOption(conversation.session, detail));
+async function loadMaterial(button) {
+  const key = button.dataset.key || "";
+  const name = button.dataset.name || "";
+  const cacheKey = key + "::" + name;
+  try {
+    let dataUrl = state.materialCache.get(cacheKey);
+    if (!dataUrl) {
+      const data = await apiGet("dashboard/material", { key, name });
+      dataUrl = data.data_url;
+      state.materialCache.set(cacheKey, dataUrl);
+      if (state.materialCache.size > 200) {
+        state.materialCache.delete(state.materialCache.keys().next().value);
+      }
+    }
+    if (!button.isConnected) {
+      return;
+    }
+    const image = make("img");
+    image.src = dataUrl;
+    image.alt = name;
+    button.classList.remove("is-loading");
+    button.prepend(image);
+    button.addEventListener("click", () => openLightbox(dataUrl, key + " · " + name));
+  } catch {
+    if (button.isConnected) {
+      button.classList.remove("is-loading");
+      button.classList.add("is-error");
+      button.title = name + " 读取失败";
+    }
   }
-  elements.historySessionFilter.value = conversations.some((item) => item.session === previous)
-    ? previous
-    : "";
+}
+
+/* --- 灯箱 ---------------------------------------------------------------- */
+
+function openLightbox(dataUrl, caption) {
+  dom.lightboxImage.src = dataUrl;
+  dom.lightboxImage.alt = caption;
+  dom.lightboxCaption.textContent = caption;
+  dom.lightbox.hidden = false;
+  dom.lightboxClose.focus({ preventScroll: true });
+}
+
+function closeLightbox() {
+  dom.lightbox.hidden = true;
+  dom.lightboxImage.removeAttribute("src");
+}
+
+/* --- 使用记录 ------------------------------------------------------------ */
+
+function renderSessions() {
+  clear(dom.sessionList);
+  const items = state.history.conversations || [];
+  if (!items.length) {
+    dom.sessionList.append(emptyState("暂无会话记录", "有人成功生成表情后，这里会出现所在会话。"));
+    return;
+  }
+  const sorted = [...items].sort((left, right) => (Number(right.count) || 0) - (Number(left.count) || 0));
+  for (const item of sorted) {
+    const row = make("button", "session-row");
+    row.type = "button";
+    row.style.setProperty("--hue", String(hueOf(item.session)));
+    row.setAttribute("aria-pressed", String(state.session === item.session));
+    const avatar = make("span", "session-avatar", glyphOf(shortSession(item.session)));
+    avatar.setAttribute("aria-hidden", "true");
+    const copy = make("div", "session-copy");
+    copy.append(
+      make("strong", "", shortSession(item.session)),
+      make("small", "", (item.platform || "--") + " · 最近 " + (item.last_key || "--") + " · " + relativeTime(item.last_used_at)),
+    );
+    row.append(avatar, copy, chip(formatNumber(item.count) + " 次", "is-mono"));
+    row.addEventListener("click", () => {
+      state.session = state.session === item.session ? "" : item.session;
+      void loadHistory();
+    });
+    dom.sessionList.append(row);
+  }
 }
 
 function renderHistory() {
-  const list = elements.historyList;
-  list.replaceChildren();
-  if (!state.history.items.length) {
-    const row = document.createElement("tr");
-    const cell = createElement("td", "empty-cell", "暂无符合范围的成功生成记录。");
-    cell.colSpan = 5;
-    row.append(cell);
-    list.append(row);
+  const items = state.history.items || [];
+  dom.recordsCount.textContent = formatNumber(items.length) + " 条";
+  clear(dom.historyBody);
+  if (!items.length) {
+    dom.historyBody.append(emptyState("暂无记录", "被选中的会话还没有生成过表情。"));
     return;
   }
-  for (const record of state.history.items) {
-    const row = document.createElement("tr");
-    const values = [
-      formatDate(record.created_at),
-      record.sender_name || record.sender_id || "--",
-      record.trigger || "--",
-      record.key || "--",
-      record.session || "--",
-    ];
-    for (const value of values) {
-      row.append(createElement("td", "", value));
+  if (state.recordsMode === "table") {
+    dom.historyBody.append(historyTable(items));
+    return;
+  }
+  const timeline = make("div", "timeline");
+  for (const group of groupByDay(items)) {
+    timeline.append(make("p", "timeline-day", group.label));
+    for (const record of group.items) {
+      timeline.append(timelineRow(record));
     }
-    list.append(row);
+  }
+  dom.historyBody.append(timeline);
+}
+
+function historyTable(items) {
+  const wrap = make("div", "table-wrap");
+  const table = make("table", "history-table");
+  const head = make("thead");
+  const headRow = make("tr");
+  for (const [label, className] of [["时间", "col-time"], ["用户", "col-who"], ["触发词", "col-key"], ["Meme", "col-key"], ["会话", "col-who"]]) {
+    const cell = make("th", className, label);
+    cell.scope = "col";
+    headRow.append(cell);
+  }
+  head.append(headRow);
+  const body = make("tbody");
+  for (const record of items) {
+    const row = make("tr");
+    row.append(make("td", "col-time", formatDateTime(record.created_at)));
+    row.append(make("td", "col-who", record.sender_name || record.sender_id || "--"));
+    row.append(make("td", "col-key", record.trigger || "--"));
+    const keyCell = make("td", "col-key");
+    const link = make("button", "", record.key);
+    link.type = "button";
+    link.addEventListener("click", () => void openDetail(record.key));
+    keyCell.append(link);
+    row.append(keyCell);
+    row.append(make("td", "col-who", (record.platform || "--") + " / " + shortSession(record.session)));
+    body.append(row);
+  }
+  table.append(head, body);
+  wrap.append(table);
+  return wrap;
+}
+
+function renderSessionOptions() {
+  const items = state.history.conversations || [];
+  clear(dom.sessionFilter);
+  const all = make("option", "", "全部会话");
+  all.value = "";
+  dom.sessionFilter.append(all);
+  for (const item of items) {
+    const option = make("option", "", shortSession(item.session) + "（" + (item.platform || "--") + "）");
+    option.value = item.session;
+    dom.sessionFilter.append(option);
+  }
+  const known = items.some((item) => item.session === state.session);
+  dom.sessionFilter.value = known ? state.session : "";
+  if (!known) {
+    state.session = "";
   }
 }
 
+/* --- 数据加载 ------------------------------------------------------------ */
+
 async function loadOverview() {
-  const data = await apiGet("dashboard/overview");
-  state.overview = data;
-  renderOverview();
+  const requestId = ++state.requests.overview;
+  try {
+    const data = await apiGet("dashboard/overview");
+    if (requestId !== state.requests.overview) {
+      return;
+    }
+    state.overview = data;
+    renderOverview();
+    setStatus("运行中 · " + formatNumber(data.enabled_memes) + " 个可用", "ok");
+  } catch (error) {
+    if (requestId !== state.requests.overview) {
+      return;
+    }
+    setStatus(error.message || "读取概览失败", "error");
+    renderOverview();
+    throw error;
+  }
 }
 
 async function loadCatalog({ resetOffset = false } = {}) {
   if (resetOffset) {
-    state.offset = 0;
+    state.catalog.offset = 0;
   }
-  const requestId = ++state.catalogRequest;
-  setMessage(elements.catalogMessage, "正在读取表情库...");
+  const requestId = ++state.requests.catalog;
+  setMessage(dom.catalogMessage, "正在读取表情库...");
+  if (!state.catalog.items.length) {
+    clear(dom.memeGrid);
+    dom.memeGrid.append(skeleton(8));
+  }
   try {
     const data = await apiGet("dashboard/memes", {
-      q: elements.searchInput.value.trim(),
-      tag: elements.tagFilter.value,
-      status: elements.statusFilter.value,
-      offset: state.offset,
+      q: state.filters.q,
+      tag: state.filters.tag,
+      status: state.filters.status,
+      source: state.filters.source,
+      sort: state.filters.sort,
+      offset: state.catalog.offset,
       limit: PAGE_SIZE,
     });
-    if (requestId !== state.catalogRequest) {
+    if (requestId !== state.requests.catalog) {
       return;
     }
-    state.catalog = data;
-    if (state.offset >= data.total && data.total > 0) {
-      state.offset = Math.max(0, Math.floor((data.total - 1) / PAGE_SIZE) * PAGE_SIZE);
-      return loadCatalog();
+    state.catalog = {
+      items: data.items || [],
+      total: Number(data.total) || 0,
+      tags: data.tags || [],
+      sources: data.sources || [],
+      offset: Number(data.offset) || 0,
+      limit: Number(data.limit) || PAGE_SIZE,
+    };
+    if (!state.catalog.items.length && state.catalog.offset > 0 && state.catalog.total > 0) {
+      state.catalog.offset = 0;
+      await loadCatalog();
+      return;
     }
-    updateTagOptions(data.tags || []);
-    setMessage(elements.catalogMessage);
+    state.filters.sort = data.sort || state.filters.sort;
+    dom.sortFilter.value = state.filters.sort;
+    renderTagOptions();
+    renderSourceChips();
+    setMessage(dom.catalogMessage);
     renderCatalog();
   } catch (error) {
-    if (requestId !== state.catalogRequest) {
+    if (requestId !== state.requests.catalog) {
       return;
     }
-    state.catalog = { items: [], total: 0, tags: [] };
+    state.catalog.items = [];
     renderCatalog();
-    setMessage(elements.catalogMessage, error.message || "读取表情库失败。", true);
-  }
-}
-
-async function showDetail(key) {
-  state.selectedKey = key;
-  state.detail = null;
-  renderCatalog();
-  renderDetailLoading();
-  const requestId = ++state.detailRequest;
-  try {
-    const data = await apiGet("dashboard/meme", { key });
-    if (requestId !== state.detailRequest || state.selectedKey !== key) {
-      return;
-    }
-    state.detail = data.item;
-    renderDetail(data.item);
-  } catch (error) {
-    if (requestId !== state.detailRequest || state.selectedKey !== key) {
-      return;
-    }
-    renderDetailError(error.message || "读取详情失败。");
-  }
-}
-
-async function openMeme(key) {
-  setActiveView("library");
-  elements.searchInput.value = key;
-  elements.tagFilter.value = "";
-  elements.statusFilter.value = "all";
-  await loadCatalog({ resetOffset: true });
-  await showDetail(key);
-}
-
-async function openConversation(session) {
-  if (!session) {
-    setActiveView("history");
-    return;
-  }
-  setActiveView("history");
-  elements.historySessionFilter.value = session;
-  await loadHistory();
-}
-
-async function toggleMeme(key, enabled, toggle) {
-  toggle.disabled = true;
-  try {
-    const data = await apiPost("dashboard/meme-enabled", { key, enabled });
-    for (const item of state.catalog.items) {
-      if (item.key === data.item.key) {
-        Object.assign(item, data.item);
-      }
-    }
-    if (state.detail?.key === data.item.key) {
-      Object.assign(state.detail, data.item);
-      renderDetail(state.detail);
-    }
-    renderCatalog();
-    await loadOverview();
-    showToast(`${data.item.key} 已${enabled ? "启用" : "禁用"}。`);
-  } catch (error) {
-    renderCatalog();
-    if (state.detail) {
-      renderDetail(state.detail);
-    }
-    showToast(error.message || "保存状态失败。", true);
-  } finally {
-    toggle.disabled = false;
+    setMessage(dom.catalogMessage, error.message || "读取表情库失败。", true);
   }
 }
 
 async function loadHistory() {
-  const requestId = ++state.historyRequest;
-  setMessage(elements.historyMessage, "正在读取最近生成记录...");
+  const requestId = ++state.requests.history;
+  setMessage(dom.historyMessage, "正在读取使用记录...");
   try {
-    const data = await apiGet("dashboard/history", {
-      session: elements.historySessionFilter.value,
-      limit: 30,
-    });
-    if (requestId !== state.historyRequest) {
+    const data = await apiGet("dashboard/history", { session: state.session, limit: HISTORY_LIMIT });
+    if (requestId !== state.requests.history) {
       return;
     }
-    state.history = data;
-    updateHistorySessionOptions(data.conversations || []);
-    setMessage(elements.historyMessage);
+    state.history = { items: data.items || [], conversations: data.conversations || [] };
+    renderSessionOptions();
+    renderSessions();
     renderHistory();
+    setMessage(dom.historyMessage);
   } catch (error) {
-    if (requestId !== state.historyRequest) {
+    if (requestId !== state.requests.history) {
       return;
     }
     state.history = { items: [], conversations: [] };
+    renderSessions();
     renderHistory();
-    setMessage(elements.historyMessage, error.message || "读取最近记录失败。", true);
+    setMessage(dom.historyMessage, error.message || "读取使用记录失败。", true);
+  }
+}
+
+async function setEnabled(key, enabled, control) {
+  if (control) {
+    control.disabled = true;
+  }
+  try {
+    const data = await apiPost("dashboard/meme-enabled", { key, enabled });
+    applyItemUpdate(data.item);
+    toast(data.item.key + " 已" + (enabled ? "启用" : "禁用") + "。");
+    void loadOverview().catch(() => {});
+  } catch (error) {
+    toast(error.message || "保存状态失败。", "error");
+  } finally {
+    if (control) {
+      control.disabled = false;
+    }
+  }
+}
+
+function applyItemUpdate(item) {
+  for (const existing of state.catalog.items) {
+    if (existing.key === item.key) {
+      Object.assign(existing, item);
+    }
+  }
+  if (state.detail?.key === item.key) {
+    Object.assign(state.detail, item);
+    renderDetail(state.detail);
+  }
+  renderCatalog();
+}
+
+async function bulkSetEnabled(enabled) {
+  const keys = [...state.selection];
+  if (!keys.length) {
+    return;
+  }
+  state.bulkBusy = true;
+  renderBulkBar();
+  try {
+    const data = await apiPost("dashboard/memes-enabled", { keys, enabled });
+    for (const item of data.items || []) {
+      for (const existing of state.catalog.items) {
+        if (existing.key === item.key) {
+          Object.assign(existing, item);
+        }
+      }
+    }
+    const missing = (data.missing || []).length;
+    toast(
+      formatNumber((data.items || []).length) + " 个表情已" + (enabled ? "启用" : "禁用") + (missing ? "，" + missing + " 个未找到" : "") + "。",
+      missing ? "error" : "ok",
+    );
+    state.selection.clear();
+    renderCatalog();
+    if (state.filters.status !== "all") {
+      await loadCatalog();
+    }
+    void loadOverview().catch(() => {});
+  } catch (error) {
+    toast(error.message || "批量保存失败。", "error");
+  } finally {
+    state.bulkBusy = false;
+    renderBulkBar();
   }
 }
 
 async function refreshAll() {
-  elements.refreshButton.disabled = true;
+  dom.refresh.disabled = true;
+  dom.refresh.classList.add("is-spinning");
   try {
-    await Promise.all([loadOverview(), loadCatalog(), loadHistory()]);
-    if (state.selectedKey) {
-      await showDetail(state.selectedKey);
+    const results = await Promise.allSettled([loadOverview(), loadCatalog(), loadHistory()]);
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed) {
+      throw failed.reason;
+    }
+    if (state.detailKey) {
+      await openDetail(state.detailKey);
     }
   } catch (error) {
-    showToast(error.message || "刷新失败。", true);
+    setStatus(error?.message || "刷新失败", "error");
   } finally {
-    elements.refreshButton.disabled = false;
+    dom.refresh.disabled = false;
+    dom.refresh.classList.remove("is-spinning");
   }
 }
 
-function applyTheme(theme) {
-  const normalized = theme === "light" ? "light" : "dark";
-  document.documentElement.dataset.theme = normalized;
-  elements.themeLight.setAttribute("aria-pressed", String(normalized === "light"));
-  elements.themeDark.setAttribute("aria-pressed", String(normalized === "dark"));
-  try {
-    window.localStorage.setItem("meme-forge-theme", normalized);
-  } catch {
-    // Private browsing or an embedded Dashboard can block local storage.
-  }
-}
+/* --- 事件绑定 ------------------------------------------------------------ */
 
-function setupEvents() {
+function bindEvents() {
+  for (const item of dom.navItems) {
+    item.addEventListener("click", () => {
+      setView(item.dataset.viewTarget);
+      if (item.dataset.viewTarget === "records" && !state.history.items.length) {
+        void loadHistory();
+      }
+    });
+  }
+  window.addEventListener("hashchange", () => setView(viewFromHash(), { syncHash: false }));
+
+  for (const button of dom.themeButtons) {
+    button.addEventListener("click", () => applyThemeMode(button.dataset.themeMode));
+  }
+  systemDark?.addEventListener?.("change", () => {
+    if (state.themeMode === "system") {
+      applyThemeMode("system", false);
+    }
+  });
+
+  dom.refresh.addEventListener("click", () => void refreshAll());
+
   let searchTimer = 0;
-  elements.searchInput.addEventListener("input", () => {
+  dom.search.addEventListener("input", () => {
     window.clearTimeout(searchTimer);
-    searchTimer = window.setTimeout(() => void loadCatalog({ resetOffset: true }), 220);
+    searchTimer = window.setTimeout(() => {
+      state.filters.q = dom.search.value.trim();
+      void loadCatalog({ resetOffset: true });
+    }, 220);
   });
-  elements.tagFilter.addEventListener("change", () => void loadCatalog({ resetOffset: true }));
-  elements.statusFilter.addEventListener("change", () => void loadCatalog({ resetOffset: true }));
-  elements.previousPage.addEventListener("click", () => {
-    state.offset = Math.max(0, state.offset - PAGE_SIZE);
-    void loadCatalog();
+  dom.tagFilter.addEventListener("change", () => {
+    state.filters.tag = dom.tagFilter.value;
+    void loadCatalog({ resetOffset: true });
   });
-  elements.nextPage.addEventListener("click", () => {
-    state.offset += PAGE_SIZE;
-    void loadCatalog();
+  dom.statusFilter.addEventListener("change", () => {
+    state.filters.status = dom.statusFilter.value;
+    void loadCatalog({ resetOffset: true });
   });
-  elements.historySessionFilter.addEventListener("change", () => void loadHistory());
-  elements.openHistoryButton.addEventListener("click", () => setActiveView("history"));
-  elements.refreshButton.addEventListener("click", () => void refreshAll());
-  elements.themeLight.addEventListener("click", () => applyTheme("light"));
-  elements.themeDark.addEventListener("click", () => applyTheme("dark"));
-  for (const item of elements.navItems) {
-    item.addEventListener("click", () => setActiveView(item.dataset.viewTarget));
+  dom.sortFilter.addEventListener("change", () => {
+    state.filters.sort = dom.sortFilter.value;
+    void loadCatalog({ resetOffset: true });
+  });
+  for (const button of dom.layoutButtons) {
+    button.addEventListener("click", () => setLayout(button.dataset.layout));
   }
-  window.addEventListener("hashchange", () => setActiveView(viewFromHash(), { syncHash: false }));
+  dom.selectModeButton.addEventListener("click", () => setSelectMode(!state.selectMode));
+  dom.bulkSelectPage.addEventListener("click", togglePageSelection);
+  dom.bulkEnable.addEventListener("click", () => void bulkSetEnabled(true));
+  dom.bulkDisable.addEventListener("click", () => void bulkSetEnabled(false));
+  dom.bulkClear.addEventListener("click", () => {
+    state.selection.clear();
+    renderCatalog();
+  });
+  dom.previousPage.addEventListener("click", () => {
+    state.catalog.offset = Math.max(0, state.catalog.offset - PAGE_SIZE);
+    void loadCatalog();
+  });
+  dom.nextPage.addEventListener("click", () => {
+    state.catalog.offset += PAGE_SIZE;
+    void loadCatalog();
+  });
+
+  dom.sessionFilter.addEventListener("change", () => {
+    state.session = dom.sessionFilter.value;
+    void loadHistory();
+  });
+  dom.clearSessionFilter.addEventListener("click", () => {
+    state.session = "";
+    void loadHistory();
+  });
+  for (const button of dom.recordsModeButtons) {
+    button.addEventListener("click", () => {
+      state.recordsMode = button.dataset.recordsMode;
+      for (const other of dom.recordsModeButtons) {
+        other.setAttribute("aria-selected", String(other === button));
+      }
+      renderHistory();
+    });
+  }
+
+  dom.drawerClose.addEventListener("click", closeDrawer);
+  dom.drawerBackdrop.addEventListener("click", closeDrawer);
+  dom.lightboxClose.addEventListener("click", closeLightbox);
+  dom.lightbox.addEventListener("click", (event) => {
+    if (event.target === dom.lightbox || event.target === dom.lightboxImage.parentElement) {
+      closeLightbox();
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      if (!dom.lightbox.hidden) {
+        closeLightbox();
+        return;
+      }
+      if (!dom.drawer.hidden) {
+        closeDrawer();
+      }
+      return;
+    }
+    if (event.key === "/" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      if (!dom.drawer.hidden || !dom.lightbox.hidden) {
+        return;
+      }
+      const tag = document.activeElement?.tagName;
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") {
+        return;
+      }
+      event.preventDefault();
+      setView("library");
+      dom.search.focus();
+    }
+  });
+}
+
+function setLayout(layout) {
+  state.layout = layout === "list" ? "list" : "grid";
+  for (const button of dom.layoutButtons) {
+    button.setAttribute("aria-selected", String(button.dataset.layout === state.layout));
+  }
+  try {
+    window.localStorage.setItem(LAYOUT_STORAGE_KEY, state.layout);
+  } catch {
+    // 忽略存储不可用。
+  }
+  renderCatalog();
+}
+
+/* --- 启动 ---------------------------------------------------------------- */
+
+function restorePreferences() {
+  let theme = "system";
+  let layout = "grid";
+  try {
+    theme = window.localStorage.getItem(THEME_STORAGE_KEY) || "system";
+    layout = window.localStorage.getItem(LAYOUT_STORAGE_KEY) || "grid";
+  } catch {
+    // 忽略存储不可用。
+  }
+  applyThemeMode(theme, false);
+  setLayout(layout);
 }
 
 async function boot() {
-  setupEvents();
-  try {
-    const preferredTheme = window.localStorage.getItem("meme-forge-theme");
-    applyTheme(preferredTheme || "dark");
-  } catch {
-    applyTheme("dark");
-  }
-  setActiveView(viewFromHash(), { syncHash: false });
+  restorePreferences();
+  bindEvents();
+  setView(viewFromHash(), { syncHash: false });
+  setStatus("正在连接...", "warn");
+  renderOverview();
+
   if (!bridge) {
-    const message = "AstrBot 页面桥接未加载。";
-    elements.extensionState.textContent = message;
-    elements.extensionState.classList.add("is-warning");
-    setMessage(elements.catalogMessage, message, true);
-    setMessage(elements.historyMessage, message, true);
-    renderOverview();
+    const message = "AstrBot 页面桥接未加载，请在 AstrBot Dashboard 内打开本页面。";
+    setStatus("桥接未加载", "error");
+    setMessage(dom.catalogMessage, message, true);
+    setMessage(dom.historyMessage, message, true);
     return;
   }
   try {
     await bridge.ready();
-    await refreshAll();
   } catch (error) {
-    const message = error.message || "页面初始化失败。";
-    elements.extensionState.textContent = message;
-    elements.extensionState.classList.add("is-warning");
-    setMessage(elements.catalogMessage, message, true);
-    setMessage(elements.historyMessage, message, true);
+    const message = error?.message || "页面初始化失败。";
+    setStatus("初始化失败", "error");
+    setMessage(dom.catalogMessage, message, true);
+    setMessage(dom.historyMessage, message, true);
+    return;
   }
+  await refreshAll();
 }
 
-boot();
+void boot();

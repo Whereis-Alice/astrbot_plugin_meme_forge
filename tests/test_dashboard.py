@@ -174,6 +174,70 @@ class MemeDashboardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(overview["recent_records"][0]["sender_name"], "Alice")
         self.assertNotIn("image", overview["recent_records"][0])
 
+    async def test_catalog_supports_source_filter_and_sorting(self) -> None:
+        self.engine.two.source = "external"
+        self.engine.two.params_type.min_images = 2
+        self.engine.two.params_type.max_images = 4
+
+        payload = self.dashboard.catalog()
+        self.assertEqual(
+            payload["sources"],
+            [
+                {"source": "external", "count": 1},
+                {"source": "meme_generator", "count": 1},
+            ],
+        )
+
+        external = self.dashboard.catalog(source="External")
+        self.assertEqual([item["key"] for item in external["items"]], ["two"])
+        # 来源与标签列表始终基于全量数据，筛选后仍能切回其它来源。
+        self.assertEqual(len(external["sources"]), 2)
+        self.assertEqual(external["tags"], ["animal", "fun", "work"])
+
+        by_images = self.dashboard.catalog(sort="images")
+        self.assertEqual([item["key"] for item in by_images["items"]], ["two", "one"])
+        by_name_desc = self.dashboard.catalog(sort="key_desc")
+        self.assertEqual([item["key"] for item in by_name_desc["items"]], ["two", "one"])
+
+        fallback = self.dashboard.catalog(sort="not-a-sort")
+        self.assertEqual(fallback["sort"], "key")
+        self.assertEqual([item["key"] for item in fallback["items"]], ["one", "two"])
+
+    async def test_overview_reports_sources_and_tag_count(self) -> None:
+        self.engine.two.source = "gouqi"
+
+        overview = self.dashboard.overview(
+            MemeUsageHistory(),
+            SimpleNamespace(
+                installed=False,
+                tag=None,
+                library_valid=False,
+                resources_present=False,
+            ),
+        )
+
+        self.assertEqual(
+            overview["sources"],
+            [
+                {"source": "gouqi", "count": 1},
+                {"source": "meme_generator", "count": 1},
+            ],
+        )
+        self.assertEqual(overview["tag_count"], 3)
+        self.assertEqual(overview["disabled_memes"], 1)
+
+    async def test_material_index_drives_has_materials(self) -> None:
+        self.assertEqual(self.dashboard._material_index(), frozenset())
+
+        directory = self.extension.meme_home / "resources" / "images" / "one"
+        directory.mkdir(parents=True)
+        (directory / "asset.png").write_bytes(PNG_BYTES)
+
+        self.assertEqual(self.dashboard._material_index(), frozenset({"one"}))
+        summaries = {item["key"]: item for item in self.dashboard.catalog()["items"]}
+        self.assertTrue(summaries["one"]["has_materials"])
+        self.assertFalse(summaries["two"]["has_materials"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,188 +8,390 @@
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
-    <div class="app-shell">
-      <aside class="sidebar">
+    <svg class="sr-only" aria-hidden="true" focusable="false">
+      <defs>
+        <symbol id="i-spark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" />
+          <path d="M18.5 16.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" />
+        </symbol>
+        <symbol id="i-overview" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="8" height="8" rx="2" />
+          <rect x="13" y="3" width="8" height="5" rx="2" />
+          <rect x="13" y="10" width="8" height="11" rx="2" />
+          <rect x="3" y="13" width="8" height="8" rx="2" />
+        </symbol>
+        <symbol id="i-library" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="14" rx="2.5" />
+          <circle cx="9" cy="10" r="1.6" />
+          <path d="M4 16.5l4.2-4.2a2 2 0 012.8 0L16 17" />
+          <path d="M14.5 14.2l1.8-1.8a2 2 0 012.8 0L21 14.7" />
+        </symbol>
+        <symbol id="i-history" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="8.5" />
+          <path d="M12 7.5V12l3.2 2" />
+        </symbol>
+        <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 11a8 8 0 10-2.6 6.3" />
+          <path d="M20 4.5V11h-6" />
+        </symbol>
+        <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="10.8" cy="10.8" r="6.3" />
+          <path d="M15.5 15.5L20 20" />
+        </symbol>
+        <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 12.8l4.4 4.2L19 7" />
+        </symbol>
+        <symbol id="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6 6l12 12M18 6L6 18" />
+        </symbol>
+        <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="9" width="11" height="11" rx="2.5" />
+          <path d="M15 6.5A2.5 2.5 0 0012.5 4H6.5A2.5 2.5 0 004 6.5v6A2.5 2.5 0 006.5 15" />
+        </symbol>
+        <symbol id="i-image" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+          <circle cx="9" cy="10" r="1.5" />
+          <path d="M4.5 17l4.4-4.3a2 2 0 012.8 0l4.8 4.8" />
+        </symbol>
+        <symbol id="i-text" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 6h14M5 12h9M5 18h11" />
+        </symbol>
+        <symbol id="i-puzzle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10 4.5a1.8 1.8 0 013.6 0V6h2.4A1.5 1.5 0 0117.5 7.5v2.2h1.3a1.8 1.8 0 010 3.6H17.5V16A1.5 1.5 0 0116 17.5h-2.4v1.2a1.8 1.8 0 01-3.6 0V17.5H7.5A1.5 1.5 0 016 16v-2.4H4.8a1.8 1.8 0 010-3.6H6V7.5A1.5 1.5 0 017.5 6H10z" />
+        </symbol>
+        <symbol id="i-tag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M11.3 3.7H19a1.3 1.3 0 011.3 1.3v7.7a1.3 1.3 0 01-.4.9l-7 7a1.3 1.3 0 01-1.8 0l-7.1-7.1a1.3 1.3 0 010-1.8l7-7a1.3 1.3 0 01.9-.4z" />
+          <circle cx="16" cy="8" r="1.4" />
+        </symbol>
+        <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 4.5l8 14.2H4z" />
+          <path d="M12 9.6v4.1M12 16.4h.01" />
+        </symbol>
+        <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="8.5" />
+          <path d="M12 11v5.2M12 8h.01" />
+        </symbol>
+        <symbol id="i-grid-view" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="4" width="7" height="7" rx="1.8" />
+          <rect x="13" y="4" width="7" height="7" rx="1.8" />
+          <rect x="4" y="13" width="7" height="7" rx="1.8" />
+          <rect x="13" y="13" width="7" height="7" rx="1.8" />
+        </symbol>
+        <symbol id="i-list-view" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 6.5h12M8 12h12M8 17.5h12" />
+          <path d="M4.4 6.5h.01M4.4 12h.01M4.4 17.5h.01" />
+        </symbol>
+        <symbol id="i-arrow-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14.5 5.5L8 12l6.5 6.5" />
+        </symbol>
+        <symbol id="i-arrow-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9.5 5.5L16 12l-6.5 6.5" />
+        </symbol>
+        <symbol id="i-select" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 8.5V6a2 2 0 012-2h2.5M20 8.5V6a2 2 0 00-2-2h-2.5M4 15.5V18a2 2 0 002 2h2.5M20 15.5V18a2 2 0 01-2 2h-2.5" />
+          <path d="M8.5 12.4l2.6 2.5 4.6-5" />
+        </symbol>
+        <symbol id="i-inbox" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3.5 13.5L6 5.5h12l2.5 8v4a2 2 0 01-2 2h-13a2 2 0 01-2-2z" />
+          <path d="M3.5 13.5H9l1 2h4l1-2h5.5" />
+        </symbol>
+      </defs>
+    </svg>
+
+    <div class="shell">
+      <aside class="rail">
         <div class="brand">
-          <div class="brand-mark" aria-hidden="true">MF</div>
+          <span class="brand-mark" aria-hidden="true"><svg><use href="#i-spark" /></svg></span>
           <div class="brand-copy">
-            <p class="eyebrow">ASTRBOT PLUGIN</p>
             <strong>Meme 工坊</strong>
+            <p class="eyebrow">MEME FORGE</p>
           </div>
         </div>
 
-        <nav class="side-nav" aria-label="Meme 工坊导航">
-          <button class="nav-item" type="button" data-view-target="overview" aria-current="page">概览</button>
-          <button class="nav-item" type="button" data-view-target="library">表情库</button>
-          <button class="nav-item" type="button" data-view-target="history">最近记录</button>
+        <nav class="rail-nav" aria-label="Meme 工坊导航">
+          <button class="nav-item is-active" type="button" data-view-target="overview" aria-current="page">
+            <svg aria-hidden="true"><use href="#i-overview" /></svg>
+            <span>概览</span>
+          </button>
+          <button class="nav-item" type="button" data-view-target="library" title="表情库">
+            <svg aria-hidden="true"><use href="#i-library" /></svg>
+            <span>表情库</span>
+            <span class="nav-badge" id="nav-library-count">--</span>
+          </button>
+          <button class="nav-item" type="button" data-view-target="records" title="使用记录">
+            <svg aria-hidden="true"><use href="#i-history" /></svg>
+            <span>使用记录</span>
+            <span class="nav-badge" id="nav-records-count">--</span>
+          </button>
         </nav>
 
-        <div class="sidebar-footer">
-          <button id="refresh-button" class="refresh-button" type="button" title="刷新数据" aria-label="刷新数据">
-            <span aria-hidden="true">&#x21bb;</span>
-            <span>刷新</span>
-          </button>
-          <div class="theme-switch" role="group" aria-label="配色主题">
-            <button id="theme-light" type="button" aria-pressed="false">浅色</button>
-            <button id="theme-dark" type="button" aria-pressed="true">夜间</button>
+        <div class="rail-foot">
+          <div class="rail-note" id="rail-note">
+            <p class="eyebrow">ENGINE</p>
+            <strong id="engine-version">--</strong>
+          </div>
+          <div class="segmented" role="tablist" aria-label="配色主题">
+            <button type="button" role="tab" data-theme-mode="system" aria-selected="true" title="跟随系统">系统</button>
+            <button type="button" role="tab" data-theme-mode="light" aria-selected="false" title="浅色主题">浅色</button>
+            <button type="button" role="tab" data-theme-mode="dark" aria-selected="false" title="夜间主题">夜间</button>
           </div>
         </div>
       </aside>
 
       <main class="workspace">
-        <header class="view-header">
-          <div>
-            <p id="view-kicker" class="eyebrow">CONTROL / OVERVIEW</p>
+        <header class="topbar">
+          <div class="topbar-title">
+            <p class="eyebrow" id="view-kicker">CONTROL / OVERVIEW</p>
             <h1 id="view-title">概览</h1>
-            <p id="view-description" class="view-description">表情库状态与近期使用情况。</p>
+          </div>
+          <div class="topbar-tools">
+            <p class="status-pill is-ok" id="status-pill" aria-live="polite">
+              <span class="status-dot" aria-hidden="true"></span>
+              <span id="status-text">正在连接</span>
+            </p>
+            <button class="btn is-icon" id="refresh-button" type="button" title="刷新数据" aria-label="刷新数据">
+              <svg aria-hidden="true"><use href="#i-refresh" /></svg>
+            </button>
           </div>
         </header>
 
-        <section id="view-overview" class="view overview-view" data-view-panel="overview" aria-labelledby="view-title">
-          <div class="metric-grid" aria-label="运行数据">
-            <div class="metric">
-              <span>已加载</span>
-              <strong id="metric-total">--</strong>
-              <small>meme</small>
-            </div>
-            <div class="metric metric-cyan">
-              <span>可用</span>
-              <strong id="metric-enabled">--</strong>
-              <small>已启用</small>
-            </div>
-            <div class="metric metric-gold">
-              <span>已禁用</span>
-              <strong id="metric-disabled">--</strong>
-              <small>可单独恢复</small>
-            </div>
-            <div class="metric metric-violet">
-              <span>生成记录</span>
-              <strong id="metric-history">--</strong>
-              <small>不包含图片</small>
-            </div>
-          </div>
-
-          <div id="extension-state" class="extension-state" aria-live="polite">正在读取扩展状态...</div>
-
-          <div class="insight-grid">
-            <section class="insight-panel" aria-labelledby="top-memes-heading">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">MOST USED</p>
-                  <h2 id="top-memes-heading">常用表情</h2>
+        <!-- 概览 -->
+        <section class="view" id="view-overview" data-view-panel="overview" aria-labelledby="view-title">
+          <div class="view-scroll">
+            <div class="overview-grid">
+              <section class="card hero span-8" aria-label="表情库总览">
+                <div class="hero-figure">
+                  <p class="eyebrow">TOTAL MEMES</p>
+                  <p class="hero-number"><span id="hero-total">--</span><small>个表情模板</small></p>
+                  <div class="hero-meta" id="hero-meta"></div>
                 </div>
-              </div>
-              <div id="top-memes" class="summary-list" aria-live="polite"></div>
-            </section>
-
-            <section class="insight-panel" aria-labelledby="conversations-heading">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">ACTIVE SESSIONS</p>
-                  <h2 id="conversations-heading">活跃会话</h2>
+                <div class="hero-breakdown">
+                  <p class="eyebrow">来源分布</p>
+                  <div class="stack-bar" id="source-bar" role="img" aria-label="表情来源分布"></div>
+                  <div class="stack-legend" id="source-legend"></div>
                 </div>
-              </div>
-              <div id="active-conversations" class="summary-list" aria-live="polite"></div>
-            </section>
+              </section>
 
-            <section class="insight-panel activity-panel" aria-labelledby="activity-heading">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">LATEST ACTIVITY</p>
-                  <h2 id="activity-heading">最近活动</h2>
+              <section class="card span-4" aria-labelledby="ext-heading">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow">EXTENSIONS</p>
+                    <h2 id="ext-heading">扩展表情库</h2>
+                  </div>
                 </div>
-                <button id="open-history-button" class="text-button" type="button">全部记录</button>
-              </div>
-              <div id="recent-activity" class="activity-list" aria-live="polite"></div>
-            </section>
-          </div>
-        </section>
-
-        <section id="view-library" class="view library-view" data-view-panel="library" aria-label="表情库" hidden>
-          <div class="workbench">
-            <section class="catalog-pane" aria-labelledby="catalog-heading">
-              <div class="section-heading">
-                <div>
-                  <p class="eyebrow">LIBRARY</p>
-                  <h2 id="catalog-heading">表情库</h2>
+                <div class="card-body">
+                  <div class="ext-list" id="extension-list" aria-live="polite"></div>
                 </div>
-                <span id="catalog-count" class="count-badge">--</span>
-              </div>
+              </section>
 
-              <div class="filters">
-                <label class="search-field">
-                  <span class="sr-only">搜索表情</span>
-                  <input id="search-input" type="search" placeholder="搜索名称、关键词或标签" autocomplete="off" />
-                </label>
-                <label>
-                  <span class="sr-only">标签</span>
-                  <select id="tag-filter">
-                    <option value="">全部标签</option>
-                  </select>
-                </label>
-                <label>
-                  <span class="sr-only">启用状态</span>
-                  <select id="status-filter">
-                    <option value="all">全部状态</option>
-                    <option value="enabled">仅已启用</option>
-                    <option value="disabled">仅已禁用</option>
-                  </select>
-                </label>
-              </div>
+              <div class="tiles span-12" id="metric-tiles" aria-label="运行指标"></div>
 
-              <div id="catalog-message" class="region-message" aria-live="polite"></div>
-              <div id="meme-list" class="meme-list" aria-live="polite"></div>
-              <nav class="pager" aria-label="表情库分页">
-                <button id="previous-page" class="icon-button" type="button" title="上一页" aria-label="上一页">&#x2190;</button>
-                <span id="page-status">--</span>
-                <button id="next-page" class="icon-button" type="button" title="下一页" aria-label="下一页">&#x2192;</button>
-              </nav>
-            </section>
+              <section class="card span-6" aria-labelledby="top-heading">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow">MOST USED</p>
+                    <h2 id="top-heading">常用表情</h2>
+                  </div>
+                  <div class="card-tools">
+                    <button class="link-btn" type="button" data-view-target="library">打开表情库</button>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="rank-list" id="top-memes" aria-live="polite"></div>
+                </div>
+              </section>
 
-            <aside id="detail-pane" class="detail-pane" aria-label="表情详情">
-              <div class="detail-empty">
-                <p class="eyebrow">INSPECT</p>
-                <h2>未选择表情</h2>
-              </div>
-            </aside>
+              <section class="card span-6" aria-labelledby="sessions-heading">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow">ACTIVE SESSIONS</p>
+                    <h2 id="sessions-heading">活跃会话</h2>
+                  </div>
+                  <div class="card-tools">
+                    <button class="link-btn" type="button" data-view-target="records">全部记录</button>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="rank-list" id="active-sessions" aria-live="polite"></div>
+                </div>
+              </section>
+
+              <section class="card span-12" aria-labelledby="activity-heading">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow">LATEST ACTIVITY</p>
+                    <h2 id="activity-heading">最近活动</h2>
+                  </div>
+                  <div class="card-tools">
+                    <button class="link-btn" type="button" data-view-target="records">查看更多</button>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="timeline" id="recent-activity" aria-live="polite"></div>
+                </div>
+              </section>
+            </div>
           </div>
         </section>
 
-        <section id="view-history" class="view history-view" data-view-panel="history" aria-label="最近记录" hidden>
-          <section class="history-section" aria-labelledby="history-heading">
-            <div class="section-heading history-heading">
-              <div>
-                <p class="eyebrow">RECENT ACTIVITY</p>
-                <h2 id="history-heading">最近生成</h2>
+        <!-- 表情库 -->
+        <section class="view" id="view-library" data-view-panel="library" aria-label="表情库" hidden>
+          <div class="library">
+            <div class="toolbar">
+              <label class="field">
+                <span class="sr-only">搜索表情</span>
+                <svg aria-hidden="true"><use href="#i-search" /></svg>
+                <input id="search-input" type="search" placeholder="搜索名称 / 关键词 / 标签" autocomplete="off" title="按 / 键快速聚焦搜索框" />
+                <kbd class="field-hint" aria-hidden="true">/</kbd>
+              </label>
+              <div class="source-chips" id="source-chips" role="group" aria-label="按来源筛选"></div>
+              <label class="select">
+                <span class="sr-only">标签</span>
+                <select id="tag-filter">
+                  <option value="">全部标签</option>
+                </select>
+              </label>
+              <label class="select">
+                <span class="sr-only">启用状态</span>
+                <select id="status-filter">
+                  <option value="all">全部状态</option>
+                  <option value="enabled">仅已启用</option>
+                  <option value="disabled">仅已禁用</option>
+                </select>
+              </label>
+              <label class="select">
+                <span class="sr-only">排序</span>
+                <select id="sort-filter">
+                  <option value="key">名称 A→Z</option>
+                  <option value="key_desc">名称 Z→A</option>
+                  <option value="images">图片需求最多</option>
+                  <option value="texts">文本需求最多</option>
+                  <option value="source">按来源分组</option>
+                </select>
+              </label>
+              <span class="toolbar-spacer"></span>
+              <span class="count-badge" id="catalog-count">--</span>
+              <div class="segmented" role="group" aria-label="列表密度">
+                <button type="button" data-layout="grid" aria-selected="true" title="卡片视图" aria-label="卡片视图">
+                  <svg aria-hidden="true" width="15" height="15"><use href="#i-grid-view" /></svg>
+                </button>
+                <button type="button" data-layout="list" aria-selected="false" title="紧凑列表" aria-label="紧凑列表">
+                  <svg aria-hidden="true" width="15" height="15"><use href="#i-list-view" /></svg>
+                </button>
               </div>
-              <label class="history-scope">
+              <button class="btn is-quiet" id="select-mode-button" type="button" aria-pressed="false">
+                <svg aria-hidden="true"><use href="#i-select" /></svg>
+                <span>多选</span>
+              </button>
+            </div>
+
+            <div class="library-scroll">
+              <p class="region-message" id="catalog-message" aria-live="polite"></p>
+              <div class="meme-grid" id="meme-grid" aria-live="polite"></div>
+            </div>
+
+            <nav class="pager" aria-label="表情库分页">
+              <button class="btn is-icon" id="previous-page" type="button" title="上一页" aria-label="上一页">
+                <svg aria-hidden="true"><use href="#i-arrow-left" /></svg>
+              </button>
+              <span class="pager-range" id="page-status">--</span>
+              <button class="btn is-icon" id="next-page" type="button" title="下一页" aria-label="下一页">
+                <svg aria-hidden="true"><use href="#i-arrow-right" /></svg>
+              </button>
+              <span class="spacer"></span>
+              <span id="pager-hint">点击卡片查看详情与命令示例</span>
+            </nav>
+
+            <div class="bulk-bar" id="bulk-bar" role="group" aria-label="批量操作">
+              <span>已选 <strong id="bulk-count">0</strong> 项</span>
+              <button class="btn is-quiet" id="bulk-select-page" type="button">本页全选</button>
+              <button class="btn is-primary" id="bulk-enable" type="button">批量启用</button>
+              <button class="btn is-danger" id="bulk-disable" type="button">批量禁用</button>
+              <button class="btn is-quiet" id="bulk-clear" type="button">清空</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 使用记录 -->
+        <section class="view" id="view-records" data-view-panel="records" aria-label="使用记录" hidden>
+          <div class="records">
+            <div class="toolbar">
+              <label class="select">
                 <span class="sr-only">会话范围</span>
                 <select id="history-session-filter">
                   <option value="">全部会话</option>
                 </select>
               </label>
+              <span class="toolbar-spacer"></span>
+              <div class="segmented" role="group" aria-label="记录展示方式">
+                <button type="button" data-records-mode="timeline" aria-selected="true">时间线</button>
+                <button type="button" data-records-mode="table" aria-selected="false">表格</button>
+              </div>
             </div>
-            <div id="history-message" class="region-message" aria-live="polite"></div>
-            <div class="history-table-wrap">
-              <table class="history-table">
-                <thead>
-                  <tr>
-                    <th scope="col">时间</th>
-                    <th scope="col">用户</th>
-                    <th scope="col">触发词</th>
-                    <th scope="col">Meme key</th>
-                    <th scope="col">会话</th>
-                  </tr>
-                </thead>
-                <tbody id="history-list"></tbody>
-              </table>
+            <div class="records-scroll">
+              <section class="card" aria-labelledby="session-heading">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow">BY SESSION</p>
+                    <h2 id="session-heading">会话排行</h2>
+                  </div>
+                  <div class="card-tools">
+                    <button class="link-btn" id="clear-session-filter" type="button">显示全部</button>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="session-list" id="session-list" aria-live="polite"></div>
+                </div>
+              </section>
+
+              <section class="card" aria-labelledby="records-heading">
+                <div class="card-head">
+                  <div>
+                    <p class="eyebrow">RECENT GENERATIONS</p>
+                    <h2 id="records-heading">最近生成</h2>
+                  </div>
+                  <div class="card-tools">
+                    <span class="count-badge" id="records-count">--</span>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <p class="region-message" id="history-message" aria-live="polite"></p>
+                  <div id="history-body"></div>
+                </div>
+              </section>
             </div>
-          </section>
+          </div>
         </section>
       </main>
     </div>
 
-    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <aside class="drawer" id="drawer" hidden>
+      <button class="drawer-backdrop" id="drawer-backdrop" type="button" aria-label="关闭详情"></button>
+      <section class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawer-title" tabindex="-1" id="drawer-panel">
+        <header class="drawer-head">
+          <div class="drawer-heading">
+            <p class="eyebrow" id="drawer-eyebrow">MEME DETAIL</p>
+            <h2 id="drawer-title">--</h2>
+          </div>
+          <button class="btn is-icon" id="drawer-close" type="button" title="关闭 (Esc)" aria-label="关闭详情">
+            <svg aria-hidden="true"><use href="#i-close" /></svg>
+          </button>
+        </header>
+        <div class="drawer-scroll" id="drawer-body"></div>
+      </section>
+    </aside>
+
+    <div class="lightbox" id="lightbox" hidden>
+      <button class="btn is-icon lightbox-close" id="lightbox-close" type="button" title="关闭" aria-label="关闭大图">
+        <svg aria-hidden="true"><use href="#i-close" /></svg>
+      </button>
+      <figure class="lightbox-figure">
+        <img id="lightbox-image" alt="" />
+        <figcaption class="lightbox-caption mono" id="lightbox-caption"></figcaption>
+      </figure>
+    </div>
+
+    <div class="toast-stack" id="toast-stack" role="status" aria-live="polite"></div>
     <script type="module" src="./app.js"></script>
   </body>
 </html>

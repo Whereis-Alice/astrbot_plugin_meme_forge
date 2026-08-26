@@ -43,6 +43,7 @@ PLUGIN_ID = "astrbot_plugin_meme_forge"
 OUTPUT_INDEX_KV_KEY = "generated_meme_outputs_v1"
 FAVORITES_KV_PREFIX = "meme_favorites_v1"
 USAGE_HISTORY_KV_KEY = "meme_usage_history_v1"
+DASHBOARD_BULK_LIMIT = 200
 
 
 class GenerationBusyError(RuntimeError):
@@ -85,6 +86,7 @@ class MemeForgePlugin(Star):
             max_records=self._history_limit(),
         )
         self._storage_lock = asyncio.Lock()
+        self._config_lock = asyncio.Lock()
         self._register_dashboard_apis()
 
     def _config_value(self, key: str, default: Any) -> Any:
@@ -109,6 +111,12 @@ class MemeForgePlugin(Star):
             ("dashboard/material", self.dashboard_material, ["GET"], "Meme 工坊素材预览"),
             ("dashboard/history", self.dashboard_history, ["GET"], "Meme 工坊使用记录"),
             ("dashboard/meme-enabled", self.dashboard_meme_enabled, ["POST"], "Meme 工坊表情启停"),
+            (
+                "dashboard/memes-enabled",
+                self.dashboard_memes_enabled,
+                ["POST"],
+                "Meme 工坊表情批量启停",
+            ),
         ]
         for suffix, handler, methods, description in apis:
             self.context.register_web_api(
@@ -150,6 +158,8 @@ class MemeForgePlugin(Star):
                 query=request.args.get("q", ""),
                 tag=request.args.get("tag", ""),
                 status=request.args.get("status", "all"),
+                source=request.args.get("source", ""),
+                sort=request.args.get("sort", "key"),
                 offset=request.args.get("offset", 0),
                 limit=request.args.get("limit", 60),
             )
@@ -220,6 +230,24 @@ class MemeForgePlugin(Star):
         except (DashboardError, TypeError, ValueError) as exc:
             return self._dashboard_error(str(exc))
 
+    def _disabled_keys(self) -> list[str]:
+        return [str(value) for value in (self._config_value("disabled_memes", []) or [])]
+
+    def _next_disabled_list(self, keys: list[str], enabled: bool) -> list[str]:
+        """Return the disabled list after enabling or disabling canonical keys."""
+        targets = set(keys)
+        remaining = [
+            value
+            for value in self._disabled_keys()
+            if value not in targets and self.engine.canonical_key(value) not in targets
+        ]
+        return remaining if enabled else [*remaining, *sorted(targets)]
+
+    async def _save_disabled_list(self, updated: list[str]) -> None:
+        async with self._config_lock:
+            self.config["disabled_memes"] = updated
+            await asyncio.to_thread(self.config.save_config)
+
     async def dashboard_meme_enabled(self):
         """Enable or disable one meme by stable key from the Dashboard Page."""
         payload = await request.get_json(silent=True) or {}
@@ -231,25 +259,54 @@ class MemeForgePlugin(Star):
         meme = self.engine.resolve(key)
         if meme is None:
             return self._dashboard_error("没有找到该 meme。", 404)
-        canonical_key = str(meme.key)
-        disabled = list(self._config_value("disabled_memes", []) or [])
-        matching = {
-            value
-            for value in disabled
-            if str(value) == canonical_key
-            or self.engine.canonical_key(str(value)) == canonical_key
-        }
-        if enabled:
-            updated = [value for value in disabled if value not in matching]
-        else:
-            updated = disabled if matching else [*disabled, canonical_key]
         try:
-            self.config["disabled_memes"] = updated
-            self.config.save_config()
+            await self._save_disabled_list(
+                self._next_disabled_list([str(meme.key)], enabled)
+            )
         except Exception as exc:  # noqa: BLE001 - config storage differs across installs
             logger.exception("[meme_forge] Dashboard 保存禁用列表失败")
             return self._dashboard_error(f"保存设置失败：{exc}", 500)
         return jsonify({"ok": True, "item": self.dashboard.meme_summary(meme)})
+
+    async def dashboard_memes_enabled(self):
+        """Enable or disable several memes in one Dashboard request."""
+        payload = await request.get_json(silent=True) or {}
+        keys = payload.get("keys")
+        enabled = payload.get("enabled")
+        if not isinstance(keys, list) or not keys or not isinstance(enabled, bool):
+            return self._dashboard_error("需要提供 meme key 列表和布尔 enabled 值。")
+        if len(keys) > DASHBOARD_BULK_LIMIT:
+            return self._dashboard_error(
+                f"一次最多处理 {DASHBOARD_BULK_LIMIT} 个 meme。"
+            )
+
+        resolved: dict[str, Any] = {}
+        missing: list[str] = []
+        for value in keys:
+            meme = self.engine.resolve(str(value).strip())
+            if meme is None:
+                missing.append(str(value))
+                continue
+            resolved.setdefault(str(meme.key), meme)
+        if not resolved:
+            return self._dashboard_error("没有找到可用的 meme。", 404)
+
+        try:
+            await self._save_disabled_list(
+                self._next_disabled_list(list(resolved), enabled)
+            )
+        except Exception as exc:  # noqa: BLE001 - config storage differs across installs
+            logger.exception("[meme_forge] Dashboard 批量保存禁用列表失败")
+            return self._dashboard_error(f"保存设置失败：{exc}", 500)
+        return jsonify(
+            {
+                "ok": True,
+                "items": [
+                    self.dashboard.meme_summary(meme) for meme in resolved.values()
+                ],
+                "missing": missing,
+            }
+        )
 
     @staticmethod
     def _recent_history_key(event: AstrMessageEvent) -> str:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
 import unittest
@@ -91,6 +92,71 @@ class RecentMemeTests(unittest.TestCase):
         self.assertNotIn("test:bob", plugin._recent_memes)
         plugin._remember_meme(other_event, memes[0])
         self.assertEqual(plugin._recent_memes["test:bob"], [("表情0", "meme_0")])
+
+
+class DisabledListTests(unittest.TestCase):
+    @staticmethod
+    def _plugin(disabled: list[str]) -> MemeForgePlugin:
+        plugin = MemeForgePlugin.__new__(MemeForgePlugin)
+        plugin.config = {"disabled_memes": list(disabled)}
+        plugin.engine = SimpleNamespace(
+            canonical_key=lambda value: {"旧别名": "old_meme"}.get(value, value)
+        )
+        return plugin
+
+    def test_enabling_drops_stable_key_and_stale_alias(self) -> None:
+        plugin = self._plugin(["petpet", "旧别名"])
+        self.assertEqual(plugin._next_disabled_list(["old_meme"], True), ["petpet"])
+
+    def test_disabling_appends_sorted_targets(self) -> None:
+        plugin = self._plugin(["petpet", "旧别名"])
+        self.assertEqual(
+            plugin._next_disabled_list(["kiss", "hug"], False),
+            ["petpet", "旧别名", "hug", "kiss"],
+        )
+
+    def test_disabling_never_duplicates_existing_entries(self) -> None:
+        plugin = self._plugin(["petpet"])
+        self.assertEqual(plugin._next_disabled_list(["petpet"], False), ["petpet"])
+
+    def test_missing_config_key_falls_back_to_empty_list(self) -> None:
+        plugin = self._plugin([])
+        plugin.config = {}
+        self.assertEqual(plugin._disabled_keys(), [])
+        self.assertEqual(plugin._next_disabled_list(["kiss"], False), ["kiss"])
+
+
+class SaveDisabledListTests(unittest.IsolatedAsyncioTestCase):
+    class FakeConfig(dict):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.saves = 0
+
+        def save_config(self) -> None:
+            self.saves += 1
+
+    async def test_writes_list_and_saves_once(self) -> None:
+        plugin = MemeForgePlugin.__new__(MemeForgePlugin)
+        plugin.config = self.FakeConfig({"disabled_memes": ["petpet"]})
+        plugin._config_lock = asyncio.Lock()
+
+        await plugin._save_disabled_list(["petpet", "kiss"])
+
+        self.assertEqual(plugin.config["disabled_memes"], ["petpet", "kiss"])
+        self.assertEqual(plugin.config.saves, 1)
+
+    async def test_concurrent_saves_are_serialised(self) -> None:
+        plugin = MemeForgePlugin.__new__(MemeForgePlugin)
+        plugin.config = self.FakeConfig({"disabled_memes": []})
+        plugin._config_lock = asyncio.Lock()
+
+        await asyncio.gather(
+            plugin._save_disabled_list(["a"]),
+            plugin._save_disabled_list(["a", "b"]),
+        )
+
+        self.assertEqual(plugin.config.saves, 2)
+        self.assertIn(plugin.config["disabled_memes"], (["a"], ["a", "b"]))
 
 
 if __name__ == "__main__":
