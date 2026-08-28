@@ -238,18 +238,47 @@
           <p id="brand-sub">本地表情包工厂 · Dashboard</p>
         </div>
         <div class="brand-actions">
-          <label class="pill pill-select" title="切换主题">
-            <span class="swatch" id="theme-swatch" aria-hidden="true"></span>
-            <select id="theme-select" aria-label="主题">
-              <option value="aurora">极光</option>
-              <option value="midnight">午夜</option>
-              <option value="carbon">碳墨</option>
-              <option value="plum">紫梅</option>
-              <option value="daylight">日光</option>
-              <option value="paper">米纸</option>
-            </select>
-            <svg class="pill-caret" aria-hidden="true"><use href="#i-chevron" /></svg>
-          </label>
+          <div class="menu-wrap" id="theme-menu">
+            <button class="pill pill-menu-trigger" id="theme-button" type="button" title="切换主题"
+                    aria-haspopup="listbox" aria-expanded="false" aria-controls="theme-pop">
+              <span class="swatch" id="theme-swatch" aria-hidden="true"></span>
+              <span class="menu-value" id="theme-label">极光</span>
+              <svg class="pill-caret" aria-hidden="true"><use href="#i-chevron" /></svg>
+            </button>
+            <div class="menu-pop" id="theme-pop" role="listbox" aria-label="配色主题" hidden>
+              <p class="menu-title">配色主题</p>
+              <button class="menu-item" type="button" role="option" id="theme-opt-aurora" data-theme="aurora" aria-selected="true">
+                <span class="menu-dot" data-dot="aurora" aria-hidden="true"></span>
+                <span class="menu-text"><b>极光</b><em>深色 · 青绿</em></span>
+                <svg class="menu-check" aria-hidden="true"><use href="#i-check" /></svg>
+              </button>
+              <button class="menu-item" type="button" role="option" id="theme-opt-midnight" data-theme="midnight" aria-selected="false">
+                <span class="menu-dot" data-dot="midnight" aria-hidden="true"></span>
+                <span class="menu-text"><b>午夜</b><em>深色 · 靛蓝</em></span>
+                <svg class="menu-check" aria-hidden="true"><use href="#i-check" /></svg>
+              </button>
+              <button class="menu-item" type="button" role="option" id="theme-opt-carbon" data-theme="carbon" aria-selected="false">
+                <span class="menu-dot" data-dot="carbon" aria-hidden="true"></span>
+                <span class="menu-text"><b>碳墨</b><em>深色 · 琥珀</em></span>
+                <svg class="menu-check" aria-hidden="true"><use href="#i-check" /></svg>
+              </button>
+              <button class="menu-item" type="button" role="option" id="theme-opt-plum" data-theme="plum" aria-selected="false">
+                <span class="menu-dot" data-dot="plum" aria-hidden="true"></span>
+                <span class="menu-text"><b>紫梅</b><em>深色 · 粉紫</em></span>
+                <svg class="menu-check" aria-hidden="true"><use href="#i-check" /></svg>
+              </button>
+              <button class="menu-item" type="button" role="option" id="theme-opt-daylight" data-theme="daylight" aria-selected="false">
+                <span class="menu-dot" data-dot="daylight" aria-hidden="true"></span>
+                <span class="menu-text"><b>日光</b><em>浅色 · 蓝紫</em></span>
+                <svg class="menu-check" aria-hidden="true"><use href="#i-check" /></svg>
+              </button>
+              <button class="menu-item" type="button" role="option" id="theme-opt-paper" data-theme="paper" aria-selected="false">
+                <span class="menu-dot" data-dot="paper" aria-hidden="true"></span>
+                <span class="menu-text"><b>米纸</b><em>浅色 · 松绿</em></span>
+                <svg class="menu-check" aria-hidden="true"><use href="#i-check" /></svg>
+              </button>
+            </div>
+          </div>
           <button class="pill pill-btn" id="density-toggle" type="button" title="切换信息密度">
             <svg aria-hidden="true"><use href="#i-density" /></svg>
             <span id="density-label">宽松</span>

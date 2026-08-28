@@ -1756,12 +1756,64 @@ function resolveBootTheme() {
   return THEMES.includes(current) ? current : THEMES[0];
 }
 
+// 主题下拉菜单是自绘的 listbox（原生 <select> 的弹出层由系统绘制，宽度和选中
+// 高亮都改不动），这里维护它的展开状态与键盘焦点。
+let themeMenuOpen = false;
+
+function themeOptions() {
+  return Array.from($("theme-pop").querySelectorAll(".menu-item"));
+}
+
+function highlightThemeOption(item) {
+  if (!item) return;
+  for (const other of themeOptions()) other.classList.toggle("is-active", other === item);
+  $("theme-pop").setAttribute("aria-activedescendant", item.id);
+}
+
+function syncThemeMenu(theme) {
+  for (const item of themeOptions()) {
+    const selected = item.dataset.theme === theme;
+    item.setAttribute("aria-selected", selected ? "true" : "false");
+    if (!selected) continue;
+    const name = item.querySelector("b");
+    $("theme-label").textContent = name ? name.textContent : theme;
+    if (!themeMenuOpen) $("theme-pop").setAttribute("aria-activedescendant", item.id);
+  }
+}
+
+function setThemeMenu(open, { refocus = true } = {}) {
+  const pop = $("theme-pop");
+  const trigger = $("theme-button");
+  const hadFocus = pop.contains(document.activeElement);
+  themeMenuOpen = open;
+  pop.hidden = !open;
+  trigger.setAttribute("aria-expanded", open ? "true" : "false");
+  if (open) {
+    const current = themeOptions().find((item) => item.getAttribute("aria-selected") === "true");
+    const target = current || themeOptions()[0];
+    highlightThemeOption(target);
+    if (target) target.focus();
+  } else if (hadFocus && refocus) {
+    // 列表被隐藏后焦点会掉到 body，交还给触发按钮，键盘操作才不会断。
+    trigger.focus();
+  }
+}
+
+function moveThemeFocus(step) {
+  const items = themeOptions();
+  if (!items.length) return;
+  const current = items.findIndex((item) => item.classList.contains("is-active"));
+  const next = items[(current + step + items.length) % items.length];
+  highlightThemeOption(next);
+  next.focus();
+}
+
 function applyTheme(name, { persist = true } = {}) {
   const theme = THEMES.includes(name) ? name : THEMES[0];
   // 主题挂在 data-mf-theme 上：AstrBot 宿主会接管并反复重写 <html data-theme>，
   // 用私有属性才不会在首屏被清成"无主题"状态。
   document.documentElement.dataset.mfTheme = theme;
-  $("theme-select").value = theme;
+  syncThemeMenu(theme);
   const accent = window.getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
   if (accent) $("theme-swatch").style.background = accent;
   if (persist) {
@@ -1841,9 +1893,49 @@ function bindShell() {
   for (const button of document.querySelectorAll("[data-goto]")) {
     button.addEventListener("click", () => switchTab(button.dataset.goto));
   }
-  $("theme-select").addEventListener("change", (event) => {
+  $("theme-button").addEventListener("click", () => setThemeMenu(!themeMenuOpen));
+  $("theme-button").addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    setThemeMenu(true);
+  });
+  $("theme-pop").addEventListener("click", (event) => {
+    const item = event.target.closest(".menu-item");
+    if (!item) return;
     themePinned = true;
-    applyTheme(event.target.value);
+    applyTheme(item.dataset.theme);
+    setThemeMenu(false);
+  });
+  $("theme-pop").addEventListener("keydown", (event) => {
+    const items = themeOptions();
+    if (event.key === "Escape") {
+      // 不让 Esc 继续冒泡，否则会顺带关掉抽屉、灯箱之类的浮层。
+      event.preventDefault();
+      event.stopPropagation();
+      setThemeMenu(false);
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      moveThemeFocus(1);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      moveThemeFocus(-1);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      highlightThemeOption(items[0]);
+      if (items[0]) items[0].focus();
+    } else if (event.key === "End") {
+      event.preventDefault();
+      const last = items[items.length - 1];
+      highlightThemeOption(last);
+      if (last) last.focus();
+    } else if (event.key === "Tab") {
+      setThemeMenu(false);
+    }
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!themeMenuOpen || $("theme-menu").contains(event.target)) return;
+    // 点击页面别处只关菜单，不要把焦点抢回按钮。
+    setThemeMenu(false, { refocus: false });
   });
   $("density-toggle").addEventListener("click", () => {
     applyDensity(document.documentElement.dataset.mfDensity === "compact" ? "cozy" : "compact");

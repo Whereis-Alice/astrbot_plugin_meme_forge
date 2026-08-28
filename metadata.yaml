@@ -1,7 +1,7 @@
 name: astrbot_plugin_meme_forge
 display_name: Meme 工坊
 desc: 支持完整参数、随机表情、永久个人收藏、QQ 表情提取、meme_emoji/Gouqi 扩展、自制模板工作台和 Dashboard 管理的本地表情包生成插件。
-version: v1.9.1
+version: v1.9.2
 author: Whereis-Alice
 repo: https://github.com/Whereis-Alice/astrbot_plugin_meme_forge
 astrbot_version: ">=4.16,<5"
