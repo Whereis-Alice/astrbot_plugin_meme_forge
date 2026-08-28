@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import mimetypes
+import re
 import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
@@ -33,6 +34,26 @@ from .maker import (
     caption_template_payload,
     decode_data_url,
 )
+
+_PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+_PLUGIN_VERSION: str | None = None
+
+
+def plugin_version() -> str:
+    """Return the plugin version declared in metadata.yaml (read once, cached).
+
+    Parsed with a regex instead of a YAML loader so the Dashboard never gains a
+    dependency just to display a version string.
+    """
+    global _PLUGIN_VERSION
+    if _PLUGIN_VERSION is None:
+        try:
+            text = (_PLUGIN_ROOT / "metadata.yaml").read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        match = re.search(r"^version:[ \t]*[\"']?([^\"'\s#]+)", text, re.MULTILINE)
+        _PLUGIN_VERSION = match.group(1) if match else "unknown"
+    return _PLUGIN_VERSION
 
 
 class DashboardError(RuntimeError):
@@ -231,6 +252,7 @@ class MemeDashboard:
             source_counts[name] = source_counts.get(name, 0) + 1
             tags.update(self.engine.get_tags(meme))
         return {
+            "plugin_version": plugin_version(),
             "engine_version": self.engine.version,
             "trigger_prefix": str(self._config_value("trigger_prefix", "meme")),
             "total_memes": total,

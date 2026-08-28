@@ -320,7 +320,7 @@ function renderOverview() {
   const enabled = Number(data.enabled_memes) || 0;
   const disabled = Number(data.disabled_memes) || 0;
 
-  $("hero-version").textContent = data.engine_version || "unknown";
+  $("hero-version").textContent = data.plugin_version || data.engine_version || "unknown";
   $("hero-count").textContent = total + " 个表情";
   $("chip-prefix").textContent = data.trigger_prefix ? data.trigger_prefix : "（未设置）";
   $("brand-sub").textContent = "本地表情包工厂 · " + total + " 个表情 · " + (data.tag_count || 0) + " 个标签";
@@ -335,6 +335,7 @@ function renderOverview() {
   engine.appendChild(row("表情总数", String(total), "mono"));
   engine.appendChild(row("可用", String(enabled), "mono is-ok"));
   engine.appendChild(row("已禁用", String(disabled), disabled ? "mono is-warn" : "mono"));
+  engine.appendChild(row("插件版本", data.plugin_version || "--", "mono"));
   engine.appendChild(row("引擎版本", data.engine_version || "--", "mono"));
   const sources = clear($("engine-sources"));
   sources.className = "chip-row is-tight";
@@ -406,7 +407,9 @@ function updateStatusLine() {
   const data = state.overview;
   const parts = [];
   if (data) {
-    parts.push("v" + (data.engine_version || "?"));
+    // metadata.yaml 里的版本本身带 v 前缀，引擎版本不带，这里统一成一个 v。
+    const version = String(data.plugin_version || data.engine_version || "?");
+    parts.push(/^v/i.test(version) ? version : "v" + version);
     parts.push(data.total_memes + " 表情");
     parts.push((data.enabled_memes || 0) + " 可用");
     if (data.disabled_memes) parts.push(data.disabled_memes + " 已禁用");
@@ -1744,25 +1747,36 @@ function switchTab(name) {
 
 /* ---------- 主题与密度 ---------- */
 
-function applyTheme(name) {
+// 用户是否显式选过主题：没有选过时跟随 AstrBot 宿主的明暗模式。
+let themePinned = false;
+
+function resolveBootTheme() {
+  // index.html 的首屏脚本已经根据本地记录 / 宿主注入的 color-scheme 定好了初始主题。
+  const current = document.documentElement.dataset.mfTheme;
+  return THEMES.includes(current) ? current : THEMES[0];
+}
+
+function applyTheme(name, { persist = true } = {}) {
   const theme = THEMES.includes(name) ? name : THEMES[0];
-  document.documentElement.dataset.theme = theme;
-  document.body.dataset.theme = theme;
+  // 主题挂在 data-mf-theme 上：AstrBot 宿主会接管并反复重写 <html data-theme>，
+  // 用私有属性才不会在首屏被清成"无主题"状态。
+  document.documentElement.dataset.mfTheme = theme;
   $("theme-select").value = theme;
   const accent = window.getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
   if (accent) $("theme-swatch").style.background = accent;
-  try {
-    window.localStorage.setItem(THEME_KEY, theme);
-  } catch (error) {
-    /* 隐私模式下忽略 */
+  if (persist) {
+    try {
+      window.localStorage.setItem(THEME_KEY, theme);
+    } catch (error) {
+      /* 隐私模式下忽略 */
+    }
   }
   window.requestAnimationFrame(moveInk);
 }
 
 function applyDensity(mode) {
   const density = mode === "compact" ? "compact" : "cozy";
-  document.documentElement.dataset.density = density;
-  document.body.dataset.density = density;
+  document.documentElement.dataset.mfDensity = density;
   $("density-label").textContent = density === "compact" ? "紧凑" : "宽松";
   $("density-toggle").classList.toggle("is-on", density === "compact");
   try {
@@ -1827,9 +1841,12 @@ function bindShell() {
   for (const button of document.querySelectorAll("[data-goto]")) {
     button.addEventListener("click", () => switchTab(button.dataset.goto));
   }
-  $("theme-select").addEventListener("change", (event) => applyTheme(event.target.value));
+  $("theme-select").addEventListener("change", (event) => {
+    themePinned = true;
+    applyTheme(event.target.value);
+  });
   $("density-toggle").addEventListener("click", () => {
-    applyDensity(document.documentElement.dataset.density === "compact" ? "cozy" : "compact");
+    applyDensity(document.documentElement.dataset.mfDensity === "compact" ? "cozy" : "compact");
   });
   $("refresh-all").addEventListener("click", async () => {
     const button = $("refresh-all");
@@ -2144,7 +2161,9 @@ function bindMaker() {
 /* ---------- 启动 ---------- */
 
 async function boot() {
-  applyTheme(readPref(THEME_KEY, "aurora"));
+  const storedTheme = readPref(THEME_KEY, "");
+  themePinned = THEMES.includes(storedTheme);
+  applyTheme(themePinned ? storedTheme : resolveBootTheme(), { persist: themePinned });
   applyDensity(readPref(DENSITY_KEY, "cozy"));
   buildSpy();
 
@@ -2181,6 +2200,12 @@ async function boot() {
     throw new Error("未检测到 AstrBot 页面桥接，请在 AstrBot WebUI 中打开本页面。");
   }
   await bridge.ready();
+  if (typeof bridge.onContext === "function") {
+    bridge.onContext((context) => {
+      if (themePinned || !context || typeof context.isDark !== "boolean") return;
+      applyTheme(context.isDark ? "aurora" : "daylight", { persist: false });
+    });
+  }
   await loadOverview();
   switchTab(window.location.hash.slice(1) || "overview");
   updateSpy();

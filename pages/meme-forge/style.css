@@ -28,6 +28,13 @@ body {
 h1, h2, h3, h4, p, dl, dd, dt, figure, ul, ol { margin: 0; }
 ul, ol { padding: 0; list-style: none; }
 button, input, select, textarea { font: inherit; color: inherit; }
+/* Native popup lists ignore the transparent backgrounds we give the closed
+   control, so paint them explicitly or dark themes render white-on-white. */
+option,
+optgroup {
+  background-color: var(--menu-bg);
+  color: var(--text);
+}
 button { cursor: pointer; }
 img { display: block; max-width: 100%; }
 a { color: var(--accent); text-decoration: none; }
@@ -99,7 +106,7 @@ svg { width: 1em; height: 1em; flex: none; }
   --dur-4: 520ms;
 }
 
-:root[data-density="compact"] {
+:root[data-mf-density="compact"] {
   --step-0: 0.8125rem;
   --step-1: 0.9375rem;
   --step-2: 1.0625rem;
@@ -115,8 +122,12 @@ svg { width: 1em; height: 1em; flex: none; }
 }
 
 /* --- 3. themes ---------------------------------------------------------- */
-:root[data-theme="aurora"] {
+/* Aurora doubles as the unattributed default so the page is never token-less
+   even if a host strips or overwrites our theme attribute. */
+:root,
+:root[data-mf-theme="aurora"] {
   color-scheme: dark;
+  --menu-bg: #0f211d;
   --bg: #06110f;
   --bg-deep: #030907;
   --mesh-1: rgba(61, 220, 151, 0.20);
@@ -143,8 +154,9 @@ svg { width: 1em; height: 1em; flex: none; }
   --checker-b: rgba(255, 255, 255, 0.02);
 }
 
-:root[data-theme="midnight"] {
+:root[data-mf-theme="midnight"] {
   color-scheme: dark;
+  --menu-bg: #111730;
   --bg: #070b18;
   --bg-deep: #03050d;
   --mesh-1: rgba(129, 140, 248, 0.22);
@@ -171,8 +183,9 @@ svg { width: 1em; height: 1em; flex: none; }
   --checker-b: rgba(255, 255, 255, 0.02);
 }
 
-:root[data-theme="carbon"] {
+:root[data-mf-theme="carbon"] {
   color-scheme: dark;
+  --menu-bg: #1a1a1d;
   --bg: #0b0b0c;
   --bg-deep: #050505;
   --mesh-1: rgba(251, 191, 36, 0.16);
@@ -199,8 +212,9 @@ svg { width: 1em; height: 1em; flex: none; }
   --checker-b: rgba(255, 255, 255, 0.02);
 }
 
-:root[data-theme="plum"] {
+:root[data-mf-theme="plum"] {
   color-scheme: dark;
+  --menu-bg: #1f1327;
   --bg: #120a17;
   --bg-deep: #0a040e;
   --mesh-1: rgba(244, 114, 182, 0.2);
@@ -227,8 +241,9 @@ svg { width: 1em; height: 1em; flex: none; }
   --checker-b: rgba(255, 255, 255, 0.02);
 }
 
-:root[data-theme="daylight"] {
+:root[data-mf-theme="daylight"] {
   color-scheme: light;
+  --menu-bg: #ffffff;
   --bg: #f3f6fc;
   --bg-deep: #e6ebf6;
   --mesh-1: rgba(79, 70, 229, 0.16);
@@ -255,8 +270,9 @@ svg { width: 1em; height: 1em; flex: none; }
   --checker-b: rgba(15, 23, 42, 0.02);
 }
 
-:root[data-theme="paper"] {
+:root[data-mf-theme="paper"] {
   color-scheme: light;
+  --menu-bg: #fffdf8;
   --bg: #f7f3ea;
   --bg-deep: #ece4d5;
   --mesh-1: rgba(15, 118, 110, 0.14);

@@ -10,6 +10,7 @@ from typing import ClassVar
 
 from PIL import Image
 
+from astrbot_plugin_meme_forge.core import dashboard as dashboard_module
 from astrbot_plugin_meme_forge.core.dashboard import DashboardError, MemeDashboard
 from astrbot_plugin_meme_forge.core.history import MemeUsageHistory
 from astrbot_plugin_meme_forge.core.maker import MakerStore
@@ -230,6 +231,31 @@ class MemeDashboardTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(overview["tag_count"], 3)
         self.assertEqual(overview["disabled_memes"], 1)
+
+    async def test_overview_reports_plugin_version_from_metadata(self) -> None:
+        overview = self.dashboard.overview(
+            MemeUsageHistory(),
+            SimpleNamespace(
+                installed=False,
+                tag=None,
+                library_valid=False,
+                resources_present=False,
+            ),
+        )
+
+        metadata = (
+            Path(dashboard_module.__file__).resolve().parent.parent / "metadata.yaml"
+        )
+        declared = ""
+        for line in metadata.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version:"):
+                declared = line.split(":", 1)[1].strip().strip("\"'")
+                break
+
+        self.assertTrue(declared)
+        self.assertEqual(overview["plugin_version"], declared)
+        self.assertEqual(dashboard_module.plugin_version(), declared)
+        self.assertNotEqual(overview["plugin_version"], overview["engine_version"])
 
     async def test_material_index_drives_has_materials(self) -> None:
         self.assertEqual(self.dashboard._material_index(), frozenset())

@@ -1,10 +1,40 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="aurora" data-density="cozy">
+<html lang="zh-CN" data-mf-theme="aurora" data-mf-density="cozy">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark light" />
     <title>Meme 工坊</title>
+    <script>
+      /*
+       * AstrBot 的插件页宿主会重写 <html data-theme>（见 dashboard/services/plugin_page_service.py
+       * 的 apply_theme_to_html，以及 plugin_page_bridge.js 的 applyContext），所以本页的主题
+       * 一律挂在私有属性 data-mf-theme / data-mf-density 上，避免被宿主清掉后变成无主题白板。
+       * 这段脚本在首屏绘制前恢复用户选择，没有本地记录时跟随宿主注入的 color-scheme。
+       */
+      (function () {
+        var root = document.documentElement;
+        var THEMES = ["aurora", "midnight", "carbon", "plum", "daylight", "paper"];
+        var theme = null;
+        var density = null;
+        try {
+          theme = window.localStorage.getItem("meme-forge-theme");
+          density = window.localStorage.getItem("meme-forge-density");
+        } catch (err) {
+          theme = null;
+          density = null;
+        }
+        if (THEMES.indexOf(theme) < 0) {
+          theme = null;
+          var meta = document.querySelector('meta[name="color-scheme"]');
+          var scheme = (meta && meta.getAttribute("content") || "").trim().toLowerCase();
+          if (scheme === "light") theme = "daylight";
+          else if (scheme === "dark") theme = "aurora";
+        }
+        root.setAttribute("data-mf-theme", theme || "aurora");
+        root.setAttribute("data-mf-density", density === "compact" ? "compact" : "cozy");
+      })();
+    </script>
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>

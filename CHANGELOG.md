@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.9.1 - 2026-08-29
+
+**修复：WebUI 首屏没有主题（白板/黑板）**
+
+- 现象：每次刚打开「Meme 工坊」页面都是无样式的黑底白字，手动切一次主题才恢复正常。
+- 原因：AstrBot 会接管插件页的 `<html data-theme>`——`dashboard/services/plugin_page_service.py` 的 `apply_theme_to_html` 在下发 HTML 时删掉页面自带的 `data-theme` 并改写成宿主的 `dark`/`light`，`plugin_page_bridge.js` 的 `applyContext` 在初始上下文和每次宿主换主题时又会再写一遍。本页六套主题原本都定义在 `:root[data-theme="…"]` 上，被改写成 `dark` 后一条都匹配不上，所有主题变量变成未定义，`var()` 全部失效，于是卡片底色、边框、阴影统统回落到初始值。
+- 修复：主题改挂在插件私有属性 `data-mf-theme` / `data-mf-density` 上，宿主再怎么写 `data-theme` 都不受影响；同时把「极光」主题同时定义在裸 `:root` 上，页面在任何情况下都不可能处于「无主题」状态。
+- 顺带把首屏主题恢复提前到 `<head>` 内联脚本，在第一次绘制前就从本地记录还原主题与密度，避免闪一下默认配色。
+- 没有手动选过主题时，页面会跟随 AstrBot 宿主的明暗模式（宿主暗色→极光，亮色→日光）；一旦自己在下拉框里选过，就固定用自己的选择，不再被宿主带着走。
+
+**修复：主题下拉框白底白字**
+
+- 深色主题下原生 `<select>` 的展开菜单是系统绘制的，页面只把控件本身设成透明背景 + 继承文字色，没有给 `option` 任何样式，展开后就成了白底白字。
+- 现在六套主题各自提供 `--menu-bg`，并统一为 `option` / `optgroup` 指定背景与文字色。
+
+**修复：插件列表不显示图标**
+
+- AstrBot 只认插件根目录下的 `logo.png`（`astrbot/core/star/star_manager.py`：`logo_fname = "logo.png"`，拼在插件目录上，存在才写入 `metadata.logo_path`），没有任何回退路径。本插件的图标此前只放在 `assets/icon.png`，所以插件市场/已安装列表里一直是空白。
+- 现在插件根目录提供 `logo.png`（512×512，与 `assets/icon.png` 同一枚徽章）。
+
+**修复：版本号显示的是引擎版本**
+
+- 首屏标题旁和底部状态栏的 `v0.2.3` 其实是 `meme_generator` 的引擎版本，容易被误认成插件版本。
+- `dashboard/overview` 新增 `plugin_version` 字段（从 `metadata.yaml` 读一次并缓存，不引入 YAML 依赖），标题与状态栏改用插件版本，引擎版本仍在「引擎」卡片里单独一行显示。
+
 ## v1.9.0 - 2026-08-29
 
 **自制表情包（Meme Maker）**
