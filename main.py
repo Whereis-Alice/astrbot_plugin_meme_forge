@@ -31,6 +31,12 @@ from .core.favorites import (
 from .core.gouqi_extension import GouqiExtensionError, GouqiExtensionManager
 from .core.grabber import MemeGrabber, MemeGrabError
 from .core.history import MemeUsageHistory
+from .core.maker import (
+    MakerError,
+    MakerStore,
+    caption_template_payload,
+    image_canvas_size,
+)
 from .core.updates import (
     SUPPORTED_RANGE_TEXT,
     compare_engine_versions,
@@ -71,11 +77,13 @@ class MemeForgePlugin(Star):
             config,
         )
         self.gouqi_extension = GouqiExtensionManager(data_dir, config)
+        self.maker_store = MakerStore(data_dir / "maker")
         self.dashboard = MemeDashboard(
             self.engine,
             self.extension,
             config,
             gouqi_extension=self.gouqi_extension,
+            maker_store=self.maker_store,
         )
         parallel = max(1, int(self._config_value("max_parallel_generations", 2)))
         self._generation_slots = asyncio.Semaphore(parallel)
@@ -116,6 +124,42 @@ class MemeForgePlugin(Star):
                 self.dashboard_memes_enabled,
                 ["POST"],
                 "Meme 工坊表情批量启停",
+            ),
+            (
+                "dashboard/maker/templates",
+                self.dashboard_maker_templates,
+                ["GET"],
+                "Meme 工坊自制模板列表",
+            ),
+            (
+                "dashboard/maker/template",
+                self.dashboard_maker_template,
+                ["GET"],
+                "Meme 工坊自制模板详情",
+            ),
+            (
+                "dashboard/maker/scaffold",
+                self.dashboard_maker_scaffold,
+                ["GET"],
+                "Meme 工坊自制模板脚手架",
+            ),
+            (
+                "dashboard/maker/preview",
+                self.dashboard_maker_preview,
+                ["POST"],
+                "Meme 工坊自制模板预览",
+            ),
+            (
+                "dashboard/maker/save",
+                self.dashboard_maker_save,
+                ["POST"],
+                "Meme 工坊自制模板保存",
+            ),
+            (
+                "dashboard/maker/delete",
+                self.dashboard_maker_delete,
+                ["POST"],
+                "Meme 工坊自制模板删除",
             ),
         ]
         for suffix, handler, methods, description in apis:
@@ -229,6 +273,102 @@ class MemeForgePlugin(Star):
             return jsonify({"ok": True, **payload})
         except (DashboardError, TypeError, ValueError) as exc:
             return self._dashboard_error(str(exc))
+
+    async def dashboard_maker_templates(self):
+        """Return every user-authored template plus workbench limits."""
+        try:
+            return jsonify({"ok": True, **self.dashboard.maker_templates()})
+        except DashboardError as exc:
+            return self._dashboard_error(str(exc))
+
+    async def dashboard_maker_template(self):
+        """Return one template with its base and overlay images inlined."""
+        try:
+            return jsonify(
+                {"ok": True, **self.dashboard.maker_template(request.args.get("key", ""))}
+            )
+        except DashboardError as exc:
+            return self._dashboard_error(str(exc), 404)
+
+    async def dashboard_maker_scaffold(self):
+        """Return a bottom-caption starter draft for the workbench."""
+        try:
+            return jsonify(
+                {
+                    "ok": True,
+                    **self.dashboard.maker_scaffold(
+                        request.args.get("key", ""),
+                        request.args.get("keywords", ""),
+                        width=request.args.get("width", 640),
+                        height=request.args.get("height", 640),
+                        title=request.args.get("title", ""),
+                        with_image_slot=request.args.get("image_slot", "") in {"1", "true", "yes"},
+                    ),
+                }
+            )
+        except (DashboardError, TypeError, ValueError) as exc:
+            return self._dashboard_error(str(exc))
+
+    @staticmethod
+    def _maker_assets(payload: dict[str, Any]) -> dict[str, Any]:
+        """Read the optional base/overlay uploads shared by preview and save."""
+        return {
+            "base_data": (
+                MemeDashboard.decode_upload(payload["base_image"])
+                if payload.get("base_image")
+                else None
+            ),
+            "overlay_data": (
+                MemeDashboard.decode_upload(payload["overlay_image"])
+                if payload.get("overlay_image")
+                else None
+            ),
+            "remove_base": bool(payload.get("remove_base")),
+            "remove_overlay": bool(payload.get("remove_overlay")),
+        }
+
+    async def dashboard_maker_preview(self):
+        """Render an unsaved draft so the workbench can iterate safely."""
+        payload = await request.get_json(silent=True) or {}
+        template = payload.get("template")
+        if not isinstance(template, dict):
+            return self._dashboard_error("需要提供 template 模板对象。")
+        try:
+            assets = self._maker_assets(payload)
+            return jsonify(
+                {"ok": True, **await self.dashboard.maker_preview(template, **assets)}
+            )
+        except DashboardError as exc:
+            return self._dashboard_error(str(exc))
+
+    async def dashboard_maker_save(self):
+        """Persist one template and hot-reload it into the running engine."""
+        payload = await request.get_json(silent=True) or {}
+        template = payload.get("template")
+        if not isinstance(template, dict):
+            return self._dashboard_error("需要提供 template 模板对象。")
+        try:
+            assets = self._maker_assets(payload)
+            result = await asyncio.to_thread(
+                lambda: self.dashboard.maker_save(template, **assets)
+            )
+        except DashboardError as exc:
+            return self._dashboard_error(str(exc))
+        loaded = await self._refresh_maker_memes(reload_engine=True)
+        return jsonify({"ok": True, **result, "loaded": loaded})
+
+    async def dashboard_maker_delete(self):
+        """Delete one template and drop it from the running engine."""
+        payload = await request.get_json(silent=True) or {}
+        key = str(payload.get("key", "")).strip()
+        if not key:
+            return self._dashboard_error("需要提供模板 key。")
+        try:
+            result = await asyncio.to_thread(self.dashboard.maker_delete, key)
+        except DashboardError as exc:
+            return self._dashboard_error(str(exc), 404)
+        loaded = await self._refresh_maker_memes(reload_engine=True)
+        return jsonify({"ok": True, **result, "loaded": loaded})
 
     def _disabled_keys(self) -> list[str]:
         return [str(value) for value in (self._config_value("disabled_memes", []) or [])]
@@ -482,6 +622,19 @@ class MemeForgePlugin(Star):
             dump_favorites(favorites),
         )
 
+    async def _refresh_maker_memes(self, *, reload_engine: bool) -> int:
+        """Rebuild user-authored templates into engine memes without a restart."""
+        maker_memes: list[Any] = []
+        if self._config_value("maker_enabled", True):
+            try:
+                maker_memes = await asyncio.to_thread(self.maker_store.build_memes)
+            except Exception as exc:  # noqa: BLE001 - malformed templates stay isolated
+                logger.warning("[meme_forge] 自制模板加载失败: %s", exc)
+        self.engine.set_extension_memes("maker", maker_memes)
+        if reload_engine:
+            await asyncio.to_thread(self.engine.reload_memes)
+        return len(maker_memes)
+
     async def _refresh_gouqi_memes(self, *, reload_engine: bool) -> int:
         gouqi_memes: list[Any] = []
         if self._config_value("gouqi_extension_enabled", True):
@@ -496,6 +649,7 @@ class MemeForgePlugin(Star):
 
     async def initialize(self) -> None:
         await self._refresh_gouqi_memes(reload_engine=False)
+        await self._refresh_maker_memes(reload_engine=False)
         await self.engine.initialize()
         try:
             records = await self.get_kv_data(OUTPUT_INDEX_KV_KEY, [])
@@ -969,6 +1123,146 @@ class MemeForgePlugin(Star):
             f"Gouqi 扩展 {status.commit[:12] if status.commit else ''} 已安装，"
             f"已热加载 {loaded} 个 meme，无需重启 AstrBot。"
         )
+
+    async def _first_event_image(self, event: AstrMessageEvent) -> bytes | None:
+        """Read the first image from a quote or from the command message itself."""
+        candidates: list[Any] = []
+        reply = self._find_reply(event)
+        if reply is not None:
+            candidates.extend(self._reply_images(reply))
+        candidates.extend(
+            component
+            for component in list(event.get_messages() or [])
+            if isinstance(component, Comp.Image)
+        )
+        for component in candidates:
+            try:
+                return await self.collector.read_image_component(component)
+            except (InputCollectionError, OSError) as exc:
+                logger.debug("[meme_forge] 读取自制模板底图失败: %s", exc)
+        return None
+
+    @filter.command("meme工坊自制列表", alias={"meme自制列表", "自制meme列表"})
+    async def maker_templates(self, event: AstrMessageEvent):
+        """列出本地自制的 Meme 模板。"""
+        if not self._config_value("maker_enabled", True):
+            yield event.plain_result("自制模板功能已关闭，请在插件配置中开启 maker_enabled。")
+            return
+        try:
+            templates = await asyncio.to_thread(self.maker_store.templates)
+        except MakerError as exc:
+            yield event.plain_result(f"读取自制模板失败：{exc}")
+            return
+        if not templates:
+            yield event.plain_result(
+                "还没有自制模板。\n"
+                "在 AstrBot 面板的“Meme 工坊 · 工作台”里可视化搭一个，"
+                "或者引用一张图片发送 /meme工坊自制新建 模板ID 触发词。"
+            )
+            return
+        lines = [f"自制模板 {len(templates)} 个："]
+        for template in templates[:40]:
+            keywords = "、".join(template.keywords) or template.key
+            lines.append(
+                f"· {template.key}｜{keywords}｜图 {len(template.image_slots)} 文 "
+                f"{len(template.text_slots)}"
+            )
+        if len(templates) > 40:
+            lines.append(f"…… 其余 {len(templates) - 40} 个请在面板查看。")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("meme工坊自制新建", alias={"meme自制新建"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def maker_create(
+        self,
+        event: AstrMessageEvent,
+        key: str | None = None,
+        *keywords: str,
+    ):
+        """引用图片快速生成一个"底部字幕"自制模板。"""
+        if not self._config_value("maker_enabled", True):
+            yield event.plain_result("自制模板功能已关闭，请在插件配置中开启 maker_enabled。")
+            return
+        template_id = str(key or "").strip()
+        if not template_id:
+            yield event.plain_result(
+                "用法：/meme工坊自制新建 模板ID 触发词 [更多触发词]\n"
+                "引用一张图片时，这张图会作为固定底图；不引用图片则生成"
+                "“一张图 + 底部字幕”的通用模板。"
+            )
+            return
+        base_data = await self._first_event_image(event)
+        try:
+            result = await asyncio.to_thread(
+                self._save_caption_template,
+                template_id,
+                list(keywords),
+                base_data,
+            )
+        except (DashboardError, MakerError) as exc:
+            yield event.plain_result(f"自制模板创建失败：{exc}")
+            return
+        loaded = await self._refresh_maker_memes(reload_engine=True)
+        item = result["item"]
+        triggers = "、".join(item["keywords"]) or item["key"]
+        yield event.plain_result(
+            f"已创建自制模板 {item['key']}（触发词：{triggers}），"
+            f"当前自制模板已热加载 {loaded} 个。\n"
+            f"发送“{triggers.split('、')[0]} 你的文字”即可生成；"
+            "想调整版式请到面板的“工作台”页。"
+        )
+
+    def _save_caption_template(
+        self,
+        key: str,
+        keywords: list[str],
+        base_data: bytes | None,
+    ) -> dict[str, Any]:
+        """Build and persist a caption template, sized from the optional base."""
+        if base_data is None:
+            width, height = 640, 640
+        else:
+            width, height = image_canvas_size(base_data)
+        payload = caption_template_payload(
+            key,
+            keywords or [key],
+            width=width,
+            height=height,
+            with_image_slot=base_data is None,
+        )
+        return self.dashboard.maker_save(payload, base_data=base_data)
+
+    @filter.command("meme工坊自制删除", alias={"meme自制删除"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def maker_delete(
+        self,
+        event: AstrMessageEvent,
+        key: str | None = None,
+    ):
+        """删除一个自制 Meme 模板及其素材。"""
+        template_id = str(key or "").strip()
+        if not template_id:
+            yield event.plain_result("用法：/meme工坊自制删除 模板ID")
+            return
+        try:
+            await asyncio.to_thread(self.dashboard.maker_delete, template_id)
+        except DashboardError as exc:
+            yield event.plain_result(str(exc))
+            return
+        loaded = await self._refresh_maker_memes(reload_engine=True)
+        yield event.plain_result(
+            f"已删除自制模板 {template_id}，当前自制模板 {loaded} 个。"
+        )
+
+    @filter.command("meme工坊自制重载", alias={"meme自制重载"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def maker_reload(self, event: AstrMessageEvent):
+        """重新扫描自制模板目录并热加载。"""
+        loaded = await self._refresh_maker_memes(reload_engine=True)
+        if not self._config_value("maker_enabled", True):
+            yield event.plain_result("自制模板功能已关闭，已从运行时移除全部自制模板。")
+            return
+        yield event.plain_result(f"已重新加载 {loaded} 个自制模板。")
 
     @filter.command("meme工坊提取", alias={"meme提取", "提取meme"})
     async def extract_meme(

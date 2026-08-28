@@ -1,176 +1,106 @@
-/**
- * Meme 工坊 · Dashboard 前端
- *
- * 结构：bridge 封装 -> 状态仓库 -> 渲染器 -> 事件绑定。
- * 所有 DOM 均通过 createElement 构建，避免把后端字符串当作 HTML 解析。
- */
-
-const bridge = window.AstrBotPluginPage;
+/* Meme 工坊 · Dashboard 前端
+   总览 / 表情库 / 工作台 / 记录 四个标签页，全部数据来自插件注册的 dashboard/* 接口。 */
 
 const PAGE_SIZE = 48;
 const HISTORY_LIMIT = 60;
 const BULK_LIMIT = 200;
-const THEME_STORAGE_KEY = "meme-forge-theme";
-const LAYOUT_STORAGE_KEY = "meme-forge-layout";
-
-const VIEWS = ["overview", "library", "records"];
-
-const VIEW_INFO = {
-  overview: { kicker: "CONTROL / OVERVIEW", title: "概览" },
-  library: { kicker: "LIBRARY / MANAGE", title: "表情库" },
-  records: { kicker: "ACTIVITY / RECORDS", title: "使用记录" },
-};
+const THEME_KEY = "meme-forge-theme";
+const DENSITY_KEY = "meme-forge-density";
+const VIEW_KEY = "meme-forge-view";
+const THUMB_KEY = "meme-forge-thumbs";
+const THEMES = ["aurora", "midnight", "carbon", "plum", "daylight", "paper"];
+const TABS = ["overview", "library", "maker", "records"];
 
 const SOURCE_INFO = {
-  meme_generator: { label: "内置", note: "meme-generator 自带" },
-  external: { label: "meme_emoji", note: "扩展表情库" },
-  gouqi: { label: "枸杞", note: "枸杞扩展表情库" },
+  meme_generator: { label: "内置", color: "#38bdf8" },
+  external: { label: "meme_emoji", color: "#a78bfa" },
+  gouqi: { label: "枸杞", color: "#f97316" },
+  maker: { label: "自制", color: "#34d399" },
 };
 
-const state = {
-  view: "overview",
-  overview: null,
-  catalog: { items: [], total: 0, tags: [], sources: [], offset: 0, limit: PAGE_SIZE },
-  filters: { q: "", tag: "", status: "all", source: "", sort: "key" },
-  layout: "grid",
-  selectMode: false,
-  selection: new Set(),
-  bulkBusy: false,
-  detail: null,
-  detailKey: "",
-  history: { items: [], conversations: [] },
-  session: "",
-  recordsMode: "timeline",
-  themeMode: "system",
-  requests: { catalog: 0, detail: 0, history: 0, overview: 0 },
-  previewCache: new Map(),
-  materialCache: new Map(),
+const SLOT_COLOR = { image: "#38bdf8", text: "#f472b6" };
+
+const MAKER_DEFAULTS = {
+  key: "",
+  title: "",
+  keywords: [],
+  width: 640,
+  height: 640,
+  background: "#101418",
+  slots: [],
 };
 
-const el = (id) => document.getElementById(id);
+/* ---------- 桥接与工具 ---------- */
 
-const dom = {
-  navItems: [...document.querySelectorAll("[data-view-target]")],
-  panels: [...document.querySelectorAll("[data-view-panel]")],
-  viewKicker: el("view-kicker"),
-  viewTitle: el("view-title"),
-  statusPill: el("status-pill"),
-  statusText: el("status-text"),
-  refresh: el("refresh-button"),
-  engineVersion: el("engine-version"),
-  navLibraryCount: el("nav-library-count"),
-  navRecordsCount: el("nav-records-count"),
-  themeButtons: [...document.querySelectorAll("[data-theme-mode]")],
-  heroTotal: el("hero-total"),
-  heroMeta: el("hero-meta"),
-  sourceBar: el("source-bar"),
-  sourceLegend: el("source-legend"),
-  extensionList: el("extension-list"),
-  metricTiles: el("metric-tiles"),
-  topMemes: el("top-memes"),
-  activeSessions: el("active-sessions"),
-  recentActivity: el("recent-activity"),
-  search: el("search-input"),
-  sourceChips: el("source-chips"),
-  tagFilter: el("tag-filter"),
-  statusFilter: el("status-filter"),
-  sortFilter: el("sort-filter"),
-  catalogCount: el("catalog-count"),
-  catalogMessage: el("catalog-message"),
-  memeGrid: el("meme-grid"),
-  layoutButtons: [...document.querySelectorAll("[data-layout]")],
-  selectModeButton: el("select-mode-button"),
-  previousPage: el("previous-page"),
-  nextPage: el("next-page"),
-  pageStatus: el("page-status"),
-  bulkBar: el("bulk-bar"),
-  bulkCount: el("bulk-count"),
-  bulkSelectPage: el("bulk-select-page"),
-  bulkEnable: el("bulk-enable"),
-  bulkDisable: el("bulk-disable"),
-  bulkClear: el("bulk-clear"),
-  sessionFilter: el("history-session-filter"),
-  clearSessionFilter: el("clear-session-filter"),
-  recordsModeButtons: [...document.querySelectorAll("[data-records-mode]")],
-  sessionList: el("session-list"),
-  recordsCount: el("records-count"),
-  historyMessage: el("history-message"),
-  historyBody: el("history-body"),
-  drawer: el("drawer"),
-  drawerPanel: el("drawer-panel"),
-  drawerBackdrop: el("drawer-backdrop"),
-  drawerClose: el("drawer-close"),
-  drawerTitle: el("drawer-title"),
-  drawerEyebrow: el("drawer-eyebrow"),
-  drawerBody: el("drawer-body"),
-  lightbox: el("lightbox"),
-  lightboxImage: el("lightbox-image"),
-  lightboxCaption: el("lightbox-caption"),
-  lightboxClose: el("lightbox-close"),
-  toastStack: el("toast-stack"),
-};
+const bridge = window.AstrBotPluginPage;
 
-/* --- 通用小工具 ---------------------------------------------------------- */
+function unwrap(payload) {
+  if (!payload || payload.ok !== true) {
+    throw new Error((payload && (payload.error || payload.message)) || "接口返回异常");
+  }
+  return payload;
+}
 
-function make(tag, className = "", text) {
+async function apiGet(endpoint, params) {
+  return unwrap(await bridge.apiGet(endpoint, params));
+}
+
+async function apiPost(endpoint, body) {
+  return unwrap(await bridge.apiPost(endpoint, body));
+}
+
+const $ = (id) => document.getElementById(id);
+
+function el(tag, className, text) {
   const node = document.createElement(tag);
-  if (className) {
-    node.className = className;
-  }
-  if (text !== undefined) {
-    node.textContent = String(text);
-  }
+  if (className) node.className = className;
+  if (text !== undefined && text !== null) node.textContent = String(text);
   return node;
 }
 
-function icon(symbolId, size) {
+function icon(name, className) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  if (className) svg.setAttribute("class", className);
   svg.setAttribute("aria-hidden", "true");
-  if (size) {
-    svg.setAttribute("width", String(size));
-    svg.setAttribute("height", String(size));
-  }
   const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
-  use.setAttribute("href", "#" + symbolId);
-  svg.append(use);
+  use.setAttribute("href", "#" + name);
+  svg.appendChild(use);
   return svg;
 }
 
 function clear(node) {
-  while (node.firstChild) {
-    node.removeChild(node.firstChild);
-  }
+  while (node.firstChild) node.removeChild(node.firstChild);
+  return node;
 }
 
-function setMessage(node, text = "", isError = false) {
-  node.textContent = text;
-  node.classList.toggle("is-error", Boolean(text) && isError);
-  node.hidden = !text;
-}
-
-function emptyState(title, description, symbolId = "i-inbox") {
-  const box = make("div", "empty-state");
-  box.append(icon(symbolId, 30), make("strong", "", title));
-  if (description) {
-    box.append(make("p", "", description));
-  }
-  return box;
-}
-
-function skeleton(count, isRow = false) {
-  const wrap = make("div", isRow ? "" : "skeleton-grid");
-  if (isRow) {
-    wrap.style.display = "grid";
-    wrap.style.gap = "8px";
-  }
-  for (let index = 0; index < count; index += 1) {
-    wrap.append(make("div", isRow ? "skeleton is-row" : "skeleton"));
-  }
+function row(label, value, valueClass) {
+  const wrap = el("div");
+  wrap.appendChild(el("dt", null, label));
+  wrap.appendChild(el("dd", valueClass || null, value));
   return wrap;
 }
 
-function hueOf(value) {
-  const text = String(value || "");
+function clamp(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
+}
+
+function formatTime(seconds) {
+  if (!seconds) return "--";
+  const date = new Date(Number(seconds) * 1000);
+  if (Number.isNaN(date.getTime())) return "--";
+  const pad = (n) => String(n).padStart(2, "0");
+  return pad(date.getMonth() + 1) + "-" + pad(date.getDate()) + " " + pad(date.getHours()) + ":" + pad(date.getMinutes());
+}
+
+function shortSession(text) {
+  const value = String(text || "");
+  if (value.length <= 22) return value;
+  return value.slice(0, 10) + "…" + value.slice(-10);
+}
+
+function hueOf(text) {
   let hash = 0;
   for (let index = 0; index < text.length; index += 1) {
     hash = (hash * 31 + text.charCodeAt(index)) % 360;
@@ -178,1547 +108,2086 @@ function hueOf(value) {
   return hash;
 }
 
-function glyphOf(value) {
-  const normalized = String(value || "MF").replace(/[^\p{L}\p{N}]/gu, "");
-  return (normalized.slice(0, 2) || "MF").toUpperCase();
+function sourceOf(key) {
+  return SOURCE_INFO[key] || { label: key || "未知", color: "#94a3b8" };
 }
 
-function sourceLabel(source) {
-  return SOURCE_INFO[source]?.label || source || "未知";
+function debounce(fn, wait) {
+  let timer = 0;
+  return (...args) => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => fn(...args), wait);
+  };
 }
 
-function formatNumber(value) {
-  return new Intl.NumberFormat("zh-CN").format(Number(value) || 0);
+async function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("读取文件失败"));
+    reader.readAsDataURL(file);
+  });
 }
 
-/** 侧边栏徽标空间很窄，四位以上直接压缩成 1.3k / 2.4M。 */
-function formatCompact(value) {
-  const amount = Number(value) || 0;
-  if (amount < 1000) {
-    return String(amount);
-  }
-  if (amount < 1000000) {
-    const scaled = amount / 1000;
-    return (scaled < 10 ? scaled.toFixed(1) : Math.round(scaled)) + "k";
-  }
-  const scaled = amount / 1000000;
-  return (scaled < 10 ? scaled.toFixed(1) : Math.round(scaled)) + "M";
-}
+/* ---------- 轻量缓存 ---------- */
 
-function formatBytes(bytes) {
-  const amount = Number(bytes) || 0;
-  if (amount < 1024) {
-    return amount + " B";
+class LruCache {
+  constructor(limit) {
+    this.limit = limit;
+    this.map = new Map();
   }
-  if (amount < 1024 * 1024) {
-    return (amount / 1024).toFixed(1) + " KB";
-  }
-  return (amount / 1024 / 1024).toFixed(1) + " MB";
-}
 
-function parseDate(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
+  get(key) {
+    if (!this.map.has(key)) return undefined;
+    const value = this.map.get(key);
+    this.map.delete(key);
+    this.map.set(key, value);
+    return value;
+  }
 
-function formatDateTime(value) {
-  const date = parseDate(value);
-  if (!date) {
-    return String(value || "--");
-  }
-  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short" }).format(date);
-}
-
-function formatTime(value) {
-  const date = parseDate(value);
-  if (!date) {
-    return "--:--";
-  }
-  return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(date);
-}
-
-function formatDayLabel(value) {
-  const date = parseDate(value);
-  if (!date) {
-    return "未知日期";
-  }
-  const today = new Date();
-  const sameDay = (left, right) =>
-    left.getFullYear() === right.getFullYear() &&
-    left.getMonth() === right.getMonth() &&
-    left.getDate() === right.getDate();
-  if (sameDay(date, today)) {
-    return "今天";
-  }
-  const yesterday = new Date(today.getTime() - 86_400_000);
-  if (sameDay(date, yesterday)) {
-    return "昨天";
-  }
-  return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(date);
-}
-
-function relativeTime(value) {
-  const date = parseDate(value);
-  if (!date) {
-    return "--";
-  }
-  const seconds = Math.round((Date.now() - date.getTime()) / 1000);
-  if (seconds < 60) {
-    return "刚刚";
-  }
-  const units = [
-    [60, "分钟"],
-    [24, "小时"],
-    [7, "天"],
-  ];
-  let amount = seconds / 60;
-  let label = "分钟";
-  for (const [step, name] of units) {
-    if (amount < step) {
-      label = name;
-      break;
+  set(key, value) {
+    if (this.map.has(key)) this.map.delete(key);
+    this.map.set(key, value);
+    while (this.map.size > this.limit) {
+      this.map.delete(this.map.keys().next().value);
     }
-    amount /= step;
-    label = name;
   }
-  return Math.max(1, Math.round(amount)) + label + "前";
-}
 
-function shortSession(session) {
-  const text = String(session || "");
-  const parts = text.split(":");
-  return parts.length > 1 ? parts.slice(1).join(":") : text;
-}
-
-/* --- 接口封装 ------------------------------------------------------------ */
-
-function unwrap(payload) {
-  if (!payload || payload.ok !== true) {
-    throw new Error(payload?.error || "请求未返回可用数据。");
+  clear() {
+    this.map.clear();
   }
-  return payload;
 }
 
-async function apiGet(endpoint, params = {}) {
-  if (!bridge) {
-    throw new Error("AstrBot 页面桥接未加载。");
-  }
-  return unwrap(await bridge.apiGet(endpoint, params));
-}
+const previewCache = new LruCache(60);
+const materialCache = new LruCache(200);
 
-async function apiPost(endpoint, body) {
-  if (!bridge) {
-    throw new Error("AstrBot 页面桥接未加载。");
-  }
-  return unwrap(await bridge.apiPost(endpoint, body));
-}
+/* ---------- 提示 ---------- */
 
-/* --- 提示条 -------------------------------------------------------------- */
-
-function toast(text, kind = "ok") {
-  const node = make("div", "toast");
-  node.dataset.kind = kind;
-  node.append(icon(kind === "error" ? "i-alert" : "i-check", 15), make("span", "", text));
-  dom.toastStack.append(node);
+function toast(message, kind) {
+  const stack = $("toast-stack");
+  const node = el("div", "toast" + (kind ? " is-" + kind : ""));
+  node.appendChild(icon(kind === "error" ? "i-alert" : kind === "ok" ? "i-check" : "i-info"));
+  node.appendChild(el("span", null, message));
+  stack.appendChild(node);
   window.setTimeout(() => {
     node.classList.add("is-out");
     window.setTimeout(() => node.remove(), 260);
-  }, 3200);
-  while (dom.toastStack.children.length > 4) {
-    dom.toastStack.firstElementChild?.remove();
-  }
+  }, kind === "error" ? 5200 : 3000);
 }
 
-function setStatus(text, kind = "ok") {
-  dom.statusText.textContent = text;
-  dom.statusPill.classList.remove("is-ok", "is-warn", "is-error");
-  dom.statusPill.classList.add("is-" + kind);
+function reportError(error, prefix) {
+  const message = (error && error.message) || String(error);
+  toast((prefix ? prefix + "：" : "") + message, "error");
 }
 
-/* --- 主题 ---------------------------------------------------------------- */
+/* ---------- 全局状态 ---------- */
 
-const systemDark = window.matchMedia?.("(prefers-color-scheme: dark)");
+const state = {
+  overview: null,
+  tab: "overview",
+  library: {
+    items: [],
+    total: 0,
+    offset: 0,
+    query: "",
+    tag: "",
+    status: "",
+    source: "",
+    sort: "key",
+    view: "grid",
+    thumbs: false,
+    selecting: false,
+    picked: new Set(),
+    loading: false,
+    token: 0,
+  },
+  maker: {
+    limits: null,
+    templates: [],
+    draft: null,
+    savedKey: null,
+    activeSlot: -1,
+    baseUpload: null,
+    overlayUpload: null,
+    baseUrl: null,
+    overlayUrl: null,
+    removeBase: false,
+    removeOverlay: false,
+    dirty: false,
+    grid: true,
+    scale: 1,
+    enabled: true,
+    busy: false,
+  },
+  records: { items: [], conversations: [], session: "", limit: HISTORY_LIMIT },
+};
 
-function resolveTheme(mode) {
-  if (mode === "light" || mode === "dark") {
-    return mode;
-  }
-  return systemDark && !systemDark.matches ? "light" : "dark";
+
+/* ---------- 总览 ---------- */
+
+function statCard(value, label, flavour) {
+  const node = el("div", "stat" + (flavour ? " is-" + flavour : ""));
+  node.appendChild(el("b", null, value));
+  node.appendChild(el("span", null, label));
+  return node;
 }
 
-function applyThemeMode(mode, persist = true) {
-  state.themeMode = ["system", "light", "dark"].includes(mode) ? mode : "system";
-  document.documentElement.dataset.theme = resolveTheme(state.themeMode);
-  for (const button of dom.themeButtons) {
-    button.setAttribute("aria-selected", String(button.dataset.themeMode === state.themeMode));
-  }
-  if (!persist) {
+function noteInto(node, text, flavour, iconName) {
+  clear(node);
+  node.className = "note" + (flavour ? " is-" + flavour : "");
+  node.appendChild(icon(iconName || (flavour === "warn" ? "i-alert" : flavour === "danger" ? "i-alert" : "i-info")));
+  node.appendChild(el("span", null, text));
+}
+
+function sourceChip(name, count) {
+  const info = sourceOf(name);
+  const chip = el("span", "chip");
+  const dot = el("i", "dot-source");
+  dot.style.setProperty("--src-color", info.color);
+  chip.appendChild(dot);
+  chip.appendChild(el("span", null, info.label));
+  chip.appendChild(el("b", "mono", String(count)));
+  return chip;
+}
+
+function renderBars(node, items, emptyText) {
+  clear(node);
+  if (!items || !items.length) {
+    node.appendChild(el("li", "empty is-inline", emptyText || "暂无数据"));
     return;
   }
-  try {
-    window.localStorage.setItem(THEME_STORAGE_KEY, state.themeMode);
-  } catch {
-    // 隐私模式或嵌入式 Dashboard 可能禁用 localStorage。
+  const top = Math.max(...items.map((item) => Number(item.count) || 0), 1);
+  for (const item of items) {
+    const count = Number(item.count) || 0;
+    const li = el("li");
+    const head = el("div", "bar-top");
+    head.appendChild(el("b", null, item.key));
+    head.appendChild(el("span", "mono", count + " 次"));
+    const track = el("div", "bar-track");
+    const fill = el("div", "bar-fill");
+    fill.style.width = Math.max(4, Math.round((count / top) * 100)) + "%";
+    track.appendChild(fill);
+    li.appendChild(head);
+    li.appendChild(track);
+    node.appendChild(li);
   }
 }
 
-/* --- 视图切换 ------------------------------------------------------------ */
-
-function viewFromHash() {
-  const hash = String(window.location.hash || "").replace(/^#\/?/, "");
-  return VIEWS.includes(hash) ? hash : "overview";
-}
-
-function setView(view, { syncHash = true } = {}) {
-  const target = VIEWS.includes(view) ? view : "overview";
-  state.view = target;
-  for (const panel of dom.panels) {
-    panel.hidden = panel.dataset.viewPanel !== target;
+function renderSessionList(node, items, onPick) {
+  clear(node);
+  if (!items || !items.length) {
+    node.appendChild(el("li", "empty is-inline", "还没有会话记录"));
+    return;
   }
-  for (const item of dom.navItems) {
-    const isActive = item.dataset.viewTarget === target;
-    if (item.classList.contains("nav-item")) {
-      item.classList.toggle("is-active", isActive);
-      if (isActive) {
-        item.setAttribute("aria-current", "page");
-      } else {
-        item.removeAttribute("aria-current");
-      }
+  for (const item of items) {
+    const li = el("li");
+    const copy = el("div", "mini-copy");
+    copy.appendChild(el("b", null, item.platform ? item.platform + " · " + shortSession(item.session) : shortSession(item.session)));
+    copy.appendChild(el("small", null, "最近 " + (item.last_key || "--") + " · " + formatTime(item.last_used_at)));
+    li.appendChild(copy);
+    li.appendChild(el("span", "mini-val", (Number(item.count) || 0) + " 次"));
+    if (onPick) {
+      li.style.cursor = "pointer";
+      li.addEventListener("click", () => onPick(item.session));
     }
-  }
-  dom.viewKicker.textContent = VIEW_INFO[target].kicker;
-  dom.viewTitle.textContent = VIEW_INFO[target].title;
-  if (syncHash && viewFromHash() !== target) {
-    window.location.hash = "#" + target;
+    node.appendChild(li);
   }
 }
 
-/* --- 概览渲染 ------------------------------------------------------------ */
+function renderFeed(node, items) {
+  clear(node);
+  if (!items || !items.length) {
+    node.appendChild(el("li", "empty is-inline", "还没有生成记录，去群里发一条试试"));
+    return;
+  }
+  for (const item of items) {
+    const li = el("li");
+    li.appendChild(el("time", null, formatTime(item.created_at)));
+    const dot = el("i", "dot-source");
+    dot.style.setProperty("--src-color", "var(--accent)");
+    li.appendChild(dot);
+    li.appendChild(el("span", "feed-key", item.key));
+    const who = item.sender_name || item.sender_id || "匿名";
+    li.appendChild(el("span", "feed-meta", who + " · " + shortSession(item.session)));
+    node.appendChild(li);
+  }
+}
 
 function renderOverview() {
   const data = state.overview;
-  dom.engineVersion.textContent = data?.engine_version || "--";
-  dom.heroTotal.textContent = data ? formatNumber(data.total_memes) : "--";
-  dom.navLibraryCount.textContent = data ? formatCompact(data.total_memes) : "--";
-  dom.navRecordsCount.textContent = data ? formatCompact(data.usage_records) : "--";
-  dom.navLibraryCount.title = data ? formatNumber(data.total_memes) + " 个表情" : "";
-  dom.navRecordsCount.title = data ? formatNumber(data.usage_records) + " 条记录" : "";
-
-  clear(dom.heroMeta);
-  if (data) {
-    const prefix = String(data.trigger_prefix || "meme");
-    dom.heroMeta.append(
-      chip("引擎 " + (data.engine_version || "--"), "is-mono"),
-      chip("前缀 /" + prefix, "is-mono is-primary"),
-      chip(formatNumber(data.enabled_memes) + " 个可用", "is-secondary"),
-    );
-  }
-
-  renderSourceBar(data?.sources || [], data?.total_memes || 0);
-  renderMetricTiles(data);
-  renderExtensions(data);
-  renderTopMemes(data?.top_memes || []);
-  renderActiveSessions(data?.active_conversations || []);
-  renderRecentActivity(data?.recent_records || []);
-}
-
-function chip(text, extra = "") {
-  return make("span", ("chip " + extra).trim(), text);
-}
-
-function renderSourceBar(sources, total) {
-  clear(dom.sourceBar);
-  clear(dom.sourceLegend);
-  if (!sources.length) {
-    dom.sourceLegend.append(make("span", "region-message", "暂无来源数据。"));
-    return;
-  }
-  const sum = sources.reduce((carry, item) => carry + (Number(item.count) || 0), 0) || total || 1;
-  for (const entry of sources) {
-    const bar = make("span");
-    bar.dataset.source = entry.source;
-    bar.style.flexBasis = ((Number(entry.count) || 0) / sum) * 100 + "%";
-    bar.style.flexGrow = "0";
-    dom.sourceBar.append(bar);
-
-    const button = make("button");
-    button.type = "button";
-    const swatch = make("span", "legend-swatch");
-    swatch.dataset.source = entry.source;
-    button.append(
-      swatch,
-      make("span", "", sourceLabel(entry.source)),
-      make("span", "legend-value", formatNumber(entry.count)),
-    );
-    button.title = "在表情库中只看" + sourceLabel(entry.source);
-    button.addEventListener("click", () => {
-      state.filters.source = entry.source;
-      setView("library");
-      void loadCatalog({ resetOffset: true });
-    });
-    dom.sourceLegend.append(button);
-  }
-}
-
-function tile(label, value, note, accent, ratio) {
-  const node = make("div", "tile");
-  if (accent) {
-    node.dataset.accent = accent;
-  }
-  node.append(make("span", "tile-label", label), make("strong", "tile-value", value));
-  // ratio 为数字时画占比条；为 null 时画一条统一的装饰条，让四块指标视觉对齐。
-  if (ratio !== undefined) {
-    const flat = ratio === null;
-    const meter = make("div", flat ? "meter is-flat" : "meter");
-    const fill = make("i");
-    fill.style.width = flat ? "100%" : Math.max(0, Math.min(100, Number(ratio) * 100)).toFixed(1) + "%";
-    meter.append(fill);
-    node.append(meter);
-  }
-  if (note) {
-    node.append(make("span", "tile-note", note));
-  }
-  return node;
-}
-
-function renderMetricTiles(data) {
-  clear(dom.metricTiles);
-  if (!data) {
-    dom.metricTiles.append(skeleton(4));
-    return;
-  }
+  if (!data) return;
   const total = Number(data.total_memes) || 0;
   const enabled = Number(data.enabled_memes) || 0;
   const disabled = Number(data.disabled_memes) || 0;
-  dom.metricTiles.append(
-    tile("已启用", formatNumber(enabled), "可被指令触发", "", total ? enabled / total : 0),
-    tile("已禁用", formatNumber(disabled), "可随时单独恢复", "danger", total ? disabled / total : 0),
-    tile("生成记录", formatNumber(data.usage_records), "仅统计文本信息，不含图片", "secondary", null),
-    tile("标签数量", formatNumber(data.tag_count), "用于筛选表情主题", "accent", null),
-  );
-}
 
-function extensionRow(title, ready, warn, description) {
-  const row = make("div", "ext-row");
-  if (ready) {
-    row.classList.add("is-ready");
-  } else if (warn) {
-    row.classList.add("is-warn");
-  }
-  const iconBox = make("span", "ext-icon");
-  iconBox.append(icon(ready ? "i-check" : warn ? "i-alert" : "i-puzzle", 16));
-  const copy = make("div", "ext-copy");
-  copy.append(make("strong", "", title), make("small", "", description));
-  row.append(iconBox, copy, chip(ready ? "就绪" : warn ? "待修复" : "未安装", ready ? "is-primary" : warn ? "is-accent" : ""));
-  return row;
-}
+  $("hero-version").textContent = data.engine_version || "unknown";
+  $("hero-count").textContent = total + " 个表情";
+  $("chip-prefix").textContent = data.trigger_prefix ? data.trigger_prefix : "（未设置）";
+  $("brand-sub").textContent = "本地表情包工厂 · " + total + " 个表情 · " + (data.tag_count || 0) + " 个标签";
 
-function renderExtensions(data) {
-  clear(dom.extensionList);
-  if (!data) {
-    dom.extensionList.append(skeleton(2, true));
-    return;
-  }
+  const stats = clear($("hero-stats"));
+  stats.appendChild(statCard(String(enabled), "可用表情", "accent"));
+  stats.appendChild(statCard(String(disabled), "已禁用", disabled ? "warn" : null));
+  stats.appendChild(statCard(String(data.tag_count || 0), "标签种类"));
+  stats.appendChild(statCard(String(data.usage_records || 0), "累计生成"));
+
+  const engine = clear($("engine-rows"));
+  engine.appendChild(row("表情总数", String(total), "mono"));
+  engine.appendChild(row("可用", String(enabled), "mono is-ok"));
+  engine.appendChild(row("已禁用", String(disabled), disabled ? "mono is-warn" : "mono"));
+  engine.appendChild(row("引擎版本", data.engine_version || "--", "mono"));
+  const sources = clear($("engine-sources"));
+  sources.className = "chip-row is-tight";
+  for (const item of data.sources || []) sources.appendChild(sourceChip(item.source, item.count));
+
   const ext = data.extension || {};
+  const extRows = clear($("extension-rows"));
+  extRows.appendChild(row("安装状态", ext.installed ? "已安装" : "未安装", ext.installed ? "is-ok" : "is-off"));
+  extRows.appendChild(row("版本标签", ext.tag || "--", "mono"));
+  extRows.appendChild(row("表情库", ext.library_valid ? "可用" : "缺失", ext.library_valid ? "is-ok" : "is-warn"));
+  extRows.appendChild(row("素材资源", ext.resources_present ? "完整" : "缺失", ext.resources_present ? "is-ok" : "is-warn"));
+  if (!ext.installed) {
+    noteInto($("extension-note"), "尚未安装扩展表情库。在聊天里发送「meme扩展安装」即可拉取 meme_emoji 的表情。", "warn");
+  } else if (!ext.library_valid || !ext.resources_present) {
+    noteInto($("extension-note"), "扩展已下载但资源不完整，发送「meme扩展更新」重新同步。", "danger");
+  } else {
+    noteInto($("extension-note"), "扩展表情已并入统一表情库，可与内置表情一起搜索和禁用。", null, "i-check");
+  }
+
   const gouqi = data.gouqi_extension || {};
-
-  const extReady = Boolean(ext.installed && ext.library_valid && ext.resources_present);
-  const extWarn = Boolean(ext.installed && !extReady);
-  const extNote = ext.installed
-    ? [ext.tag ? "版本 " + ext.tag : "版本未知", ext.library_valid ? "清单正常" : "清单异常", ext.resources_present ? "素材完整" : "素材缺失"].join(" · ")
-    : "未安装，可在插件配置中启用后自动下载";
-  dom.extensionList.append(extensionRow("meme_emoji 扩展", extReady, extWarn, extNote));
-
-  const gouqiReady = Boolean(gouqi.installed && gouqi.assets_valid);
-  const gouqiWarn = Boolean(gouqi.installed && !gouqiReady);
-  const gouqiNote = gouqi.installed
-    ? [gouqi.commit ? "commit " + String(gouqi.commit).slice(0, 7) : "commit 未知", formatNumber(gouqi.templates) + " 个模板", gouqi.assets_valid ? "素材完整" : "素材缺失"].join(" · ")
-    : "未安装，可在插件配置中启用后自动下载";
-  dom.extensionList.append(extensionRow("枸杞扩展", gouqiReady, gouqiWarn, gouqiNote));
-}
-
-function rankRow(index, title, subtitle, value, ratio, onOpen) {
-  const row = make(onOpen ? "button" : "div", "rank-row");
-  if (onOpen) {
-    row.type = "button";
-    row.addEventListener("click", onOpen);
+  const gouqiRows = clear($("gouqi-rows"));
+  gouqiRows.appendChild(row("安装状态", gouqi.installed ? "已安装" : "未安装", gouqi.installed ? "is-ok" : "is-off"));
+  gouqiRows.appendChild(row("模板数量", String(gouqi.templates || 0), "mono"));
+  gouqiRows.appendChild(row("素材校验", gouqi.assets_valid ? "通过" : "缺失", gouqi.assets_valid ? "is-ok" : "is-warn"));
+  gouqiRows.appendChild(row("提交版本", gouqi.commit ? String(gouqi.commit).slice(0, 10) : "--", "mono"));
+  if (!gouqi.installed) {
+    noteInto($("gouqi-note"), "Gouqi 扩展提供一批本地绘制的整图模板，发送「meme枸杞安装」即可启用。", "warn");
+  } else {
+    noteInto($("gouqi-note"), "模板由插件内的 Pillow 渲染，不依赖任何外部接口。", null, "i-shield");
   }
-  row.style.setProperty("--fill", Math.max(0, Math.min(100, ratio * 100)).toFixed(1) + "%");
-  const copy = make("div", "rank-copy");
-  copy.append(make("strong", "", title), make("small", "", subtitle));
-  row.append(make("span", "rank-index", String(index).padStart(2, "0")), copy, make("span", "rank-value", value));
-  return row;
-}
 
-function renderTopMemes(items) {
-  clear(dom.topMemes);
-  if (!items.length) {
-    dom.topMemes.append(emptyState("还没有生成记录", "触发一次表情后，这里会显示最常用的模板。"));
-    return;
+  const maker = data.maker || {};
+  const makerRows = clear($("maker-rows"));
+  makerRows.appendChild(row("功能状态", maker.enabled ? "已开启" : "已关闭", maker.enabled ? "is-ok" : "is-off"));
+  makerRows.appendChild(row("自制模板", String(maker.total || 0), "mono"));
+  const limits = maker.limits || {};
+  const canvas = limits.canvas || {};
+  const limitBox = clear($("maker-limits"));
+  limitBox.className = "subcard";
+  if (maker.enabled) {
+    limitBox.appendChild(el("p", null,
+      "上限：" + (limits.templates || 0) + " 个模板 · " + (limits.slots || 0) + " 个图层（图片 " +
+      (limits.image_slots || 0) + " / 文字 " + (limits.text_slots || 0) + "） · 画布 " +
+      (canvas.min || 0) + "~" + (canvas.max || 0) + "px · 单张素材 " + (limits.asset_mb || 0) + "MB"));
+  } else {
+    limitBox.appendChild(el("p", null, "在插件配置中开启 maker_enabled 后即可使用工作台。"));
   }
-  const max = Math.max(...items.map((item) => Number(item.count) || 0), 1);
-  items.forEach((item, index) => {
-    dom.topMemes.append(
-      rankRow(
-        index + 1,
-        item.key,
-        "最近触发词 " + (item.last_trigger || item.key) + " · " + relativeTime(item.last_used_at),
-        formatNumber(item.count) + " 次",
-        (Number(item.count) || 0) / max,
-        () => void openDetail(item.key),
-      ),
-    );
+
+  renderBars($("top-memes"), data.top_memes, "还没有人用过表情");
+  renderSessionList($("active-sessions"), data.active_conversations, (session) => {
+    state.records.session = session;
+    switchTab("records");
+    $("rec-session").value = session;
+    loadRecords().catch((error) => reportError(error, "记录"));
   });
+  renderFeed($("recent-feed"), data.recent_records);
+
+  $("tab-badge-library").textContent = String(total);
+  const makerOn = maker.enabled !== false;
+  const makerBadge = $("tab-badge-maker");
+  makerBadge.textContent = makerOn ? String(maker.total || 0) : "关";
+  makerBadge.classList.toggle("is-off", !makerOn);
+  state.maker.enabled = makerOn;
+  if (maker.limits) state.maker.limits = maker.limits;
+  updateStatusLine();
 }
 
-function renderActiveSessions(items) {
-  clear(dom.activeSessions);
-  if (!items.length) {
-    dom.activeSessions.append(emptyState("暂无活跃会话", "有人使用表情后，这里会显示所在会话。"));
-    return;
+function updateStatusLine() {
+  const data = state.overview;
+  const parts = [];
+  if (data) {
+    parts.push("v" + (data.engine_version || "?"));
+    parts.push(data.total_memes + " 表情");
+    parts.push((data.enabled_memes || 0) + " 可用");
+    if (data.disabled_memes) parts.push(data.disabled_memes + " 已禁用");
   }
-  const max = Math.max(...items.map((item) => Number(item.count) || 0), 1);
-  items.forEach((item, index) => {
-    dom.activeSessions.append(
-      rankRow(
-        index + 1,
-        shortSession(item.session),
-        (item.platform || "未知平台") + " · 最近 " + (item.last_key || "--") + " · " + relativeTime(item.last_used_at),
-        formatNumber(item.count) + " 次",
-        (Number(item.count) || 0) / max,
-        () => {
-          state.session = item.session;
-          setView("records");
-          void loadHistory();
-        },
-      ),
-    );
-  });
+  if (state.tab === "library" && state.library.total) {
+    parts.push("筛选 " + state.library.total + " 项");
+  }
+  if (state.tab === "maker") {
+    parts.push((state.maker.templates.length || 0) + " 个自制模板");
+    if (state.maker.dirty) parts.push("未保存");
+  }
+  $("status-left").textContent = parts.length ? parts.join(" · ") : "--";
 }
 
-function groupByDay(items) {
-  const groups = [];
-  let current = null;
-  for (const item of items) {
-    const label = formatDayLabel(item.created_at);
-    if (!current || current.label !== label) {
-      current = { label, items: [] };
-      groups.push(current);
-    }
-    current.items.push(item);
-  }
-  return groups;
-}
-
-function renderRecentActivity(items) {
-  clear(dom.recentActivity);
-  if (!items.length) {
-    dom.recentActivity.append(emptyState("暂无活动", "最近成功生成的表情会出现在这里。"));
-    return;
-  }
-  for (const group of groupByDay(items)) {
-    dom.recentActivity.append(make("p", "timeline-day", group.label));
-    for (const record of group.items) {
-      dom.recentActivity.append(timelineRow(record));
-    }
+async function loadOverview() {
+  try {
+    const payload = await apiGet("dashboard/overview");
+    state.overview = payload;
+    renderOverview();
+  } catch (error) {
+    reportError(error, "总览加载失败");
   }
 }
 
-function timelineRow(record) {
-  const row = make("button", "timeline-row");
-  row.type = "button";
-  const copy = make("div", "timeline-copy");
-  copy.append(
-    make("strong", "", record.key + "  ·  " + (record.trigger || record.key)),
-    make("small", "", (record.sender_name || record.sender_id || "未知用户") + " @ " + shortSession(record.session)),
-  );
-  row.append(make("span", "timeline-time", formatTime(record.created_at)), copy, chip(record.platform || "--", "is-mono"));
-  row.title = "查看 " + record.key + " 详情";
-  row.addEventListener("click", () => void openDetail(record.key));
-  return row;
+
+/* ---------- 表情库 ---------- */
+
+const thumbQueue = { running: 0, waiting: [] };
+
+function queueThumb(job) {
+  thumbQueue.waiting.push(job);
+  pumpThumbs();
 }
 
-/* --- 表情库 -------------------------------------------------------------- */
-
-function renderSourceChips() {
-  clear(dom.sourceChips);
-  const sources = state.catalog.sources || [];
-  const total = sources.reduce((carry, item) => carry + (Number(item.count) || 0), 0);
-  if (sources.length < 2) {
-    dom.sourceChips.hidden = true;
-    return;
-  }
-  dom.sourceChips.hidden = false;
-  const entries = [
-    { source: "", label: "全部", count: total },
-    ...sources.map((item) => ({ source: item.source, label: sourceLabel(item.source), count: item.count })),
-  ];
-  for (const entry of entries) {
-    const button = make("button");
-    button.type = "button";
-    button.append(document.createTextNode(entry.label), make("b", "", formatNumber(entry.count)));
-    button.setAttribute("aria-pressed", String(state.filters.source === entry.source));
-    button.addEventListener("click", () => {
-      state.filters.source = entry.source;
-      void loadCatalog({ resetOffset: true });
+function pumpThumbs() {
+  while (thumbQueue.running < 3 && thumbQueue.waiting.length) {
+    const job = thumbQueue.waiting.shift();
+    thumbQueue.running += 1;
+    job().catch(() => {}).finally(() => {
+      thumbQueue.running -= 1;
+      pumpThumbs();
     });
-    dom.sourceChips.append(button);
   }
 }
 
-function renderTagOptions() {
-  const current = state.filters.tag;
-  clear(dom.tagFilter);
-  const all = make("option", "", "全部标签");
-  all.value = "";
-  dom.tagFilter.append(all);
-  for (const tag of state.catalog.tags || []) {
-    const option = make("option", "", tag);
-    option.value = tag;
-    dom.tagFilter.append(option);
+let thumbObserver = null;
+
+function ensureThumbObserver() {
+  if (thumbObserver) return thumbObserver;
+  thumbObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const node = entry.target;
+      thumbObserver.unobserve(node);
+      queueThumb(() => fillThumb(node));
+    }
+  }, { rootMargin: "240px 0px" });
+  return thumbObserver;
+}
+
+async function fillThumb(node) {
+  const key = node.dataset.key;
+  if (!key || node.dataset.filled === "1") return;
+  node.dataset.filled = "1";
+  const cached = previewCache.get(key);
+  if (cached) {
+    paintThumb(node, cached);
+    return;
   }
-  dom.tagFilter.value = (state.catalog.tags || []).includes(current) ? current : "";
-  state.filters.tag = dom.tagFilter.value;
+  try {
+    const payload = await apiGet("dashboard/preview", { key });
+    previewCache.set(key, payload.data_url);
+    paintThumb(node, payload.data_url);
+  } catch {
+    node.dataset.filled = "";
+  }
+}
+
+function paintThumb(node, dataUrl) {
+  const image = el("img");
+  image.src = dataUrl;
+  image.alt = node.dataset.key || "";
+  image.loading = "lazy";
+  clear(node).appendChild(image);
+  node.classList.add("checker");
 }
 
 function memeCard(item) {
-  const card = make("article", "meme-card");
-  card.style.setProperty("--hue", String(hueOf(item.key)));
+  const card = el("article", "meme");
   card.dataset.key = item.key;
-  card.classList.toggle("is-off", !item.enabled);
-  card.classList.toggle("is-selected", state.selection.has(item.key));
+  card.tabIndex = 0;
+  card.setAttribute("role", "button");
+  if (!item.enabled) card.classList.add("is-disabled");
+  if (state.library.picked.has(item.key)) card.classList.add("is-picked");
 
-  const open = make("button", "meme-open");
-  open.type = "button";
-  open.setAttribute("aria-label", "查看 " + item.key + " 的详情");
-  open.addEventListener("click", () => {
-    if (state.selectMode) {
-      toggleSelection(item.key);
-      return;
-    }
-    void openDetail(item.key);
-  });
-
-  const glyph = make("span", "meme-glyph", glyphOf(item.key));
-  glyph.setAttribute("aria-hidden", "true");
-
-  const body = make("div", "meme-body");
-  body.append(make("span", "meme-key", item.key));
-  const keywords = (item.keywords || []).filter(Boolean);
-  body.append(make("span", "meme-keywords", keywords.length ? keywords.join(" · ") : "无触发关键词"));
-
-  const foot = make("div", "meme-foot");
-  const sourceBadge = make("span", "meme-badge");
-  sourceBadge.dataset.source = item.source;
-  sourceBadge.append(icon("i-puzzle", 11), make("span", "", sourceLabel(item.source)));
-  const needBadge = make("span", "meme-need");
-  needBadge.append(
-    icon("i-image", 11),
-    make("span", "", item.images?.label ?? "0"),
-    make("i"),
-    icon("i-text", 11),
-    make("span", "", item.texts?.label ?? "0"),
-  );
-  needBadge.title = "需要图片 " + (item.images?.label ?? "0") + " 张，文本 " + (item.texts?.label ?? "0") + " 段";
-  foot.append(sourceBadge, needBadge, make("span", "spacer"));
-
-  if (state.selectMode) {
-    const pick = make("button", "pick");
-    pick.type = "button";
-    pick.setAttribute("role", "checkbox");
-    pick.setAttribute("aria-checked", String(state.selection.has(item.key)));
-    pick.setAttribute("aria-label", "选择 " + item.key);
-    pick.append(icon("i-check", 12));
-    pick.addEventListener("click", () => toggleSelection(item.key));
-    foot.append(pick);
+  const info = sourceOf(item.source);
+  const glyphText = String((item.keywords && item.keywords[0]) || item.key || "?").slice(0, 1);
+  const thumb = el("div", "meme-thumb");
+  thumb.dataset.key = item.key;
+  thumb.style.setProperty("--glyph", "hsl(" + hueOf(item.key) + " 72% 62%)");
+  if (state.library.thumbs) {
+    ensureThumbObserver().observe(thumb);
+    thumb.appendChild(el("div", "skeleton"));
+    thumb.firstChild.style.cssText = "position:absolute;inset:0";
   } else {
-    const toggle = make("button", "switch");
-    toggle.type = "button";
-    toggle.setAttribute("role", "switch");
-    toggle.setAttribute("aria-checked", String(item.enabled));
-    toggle.setAttribute("aria-label", (item.enabled ? "禁用 " : "启用 ") + item.key);
-    toggle.title = item.enabled ? "点击禁用" : "点击启用";
-    toggle.addEventListener("click", () => void setEnabled(item.key, !item.enabled, toggle));
-    foot.append(toggle);
+    thumb.appendChild(el("span", "meme-glyph", glyphText));
+  }
+  card.appendChild(thumb);
+
+  const body = el("div", "meme-body");
+  const keyLine = el("div", "meme-key");
+  const dot = el("i", "dot-source");
+  dot.style.setProperty("--src-color", info.color);
+  dot.title = info.label;
+  keyLine.appendChild(dot);
+  keyLine.appendChild(el("b", "mono", item.key));
+  if (!item.enabled) keyLine.appendChild(el("span", "chip is-off", "已禁用"));
+  body.appendChild(keyLine);
+  body.appendChild(el("div", "meme-kw", (item.keywords || []).join(" · ") || "无触发词"));
+  card.appendChild(body);
+
+  const foot = el("div", "meme-foot");
+  const imageIo = el("span", "io");
+  imageIo.appendChild(icon("i-image"));
+  imageIo.appendChild(el("span", null, item.images ? item.images.label : "0"));
+  const textIo = el("span", "io");
+  textIo.appendChild(icon("i-text"));
+  textIo.appendChild(el("span", null, item.texts ? item.texts.label : "0"));
+  foot.appendChild(imageIo);
+  foot.appendChild(textIo);
+  if (item.has_materials) {
+    const mat = el("span", "io");
+    mat.appendChild(icon("i-puzzle"));
+    mat.appendChild(el("span", null, "素材"));
+    foot.appendChild(mat);
+  }
+  foot.appendChild(el("span", "io", info.label));
+  card.appendChild(foot);
+
+  if (state.library.selecting) {
+    const pick = el("button", "btn is-icon is-tiny meme-pick");
+    pick.type = "button";
+    pick.title = "选择";
+    if (state.library.picked.has(item.key)) pick.classList.add("is-on");
+    pick.appendChild(icon(state.library.picked.has(item.key) ? "i-check" : "i-select"));
+    pick.addEventListener("click", (event) => {
+      event.stopPropagation();
+      togglePick(item.key);
+    });
+    card.appendChild(pick);
   }
 
-  card.append(open, glyph, body, foot);
+  card.addEventListener("click", () => {
+    if (state.library.selecting) togglePick(item.key);
+    else openMeme(item.key);
+  });
+  card.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    card.click();
+  });
   return card;
 }
 
-function renderCatalog() {
-  const { items, total, offset, limit } = state.catalog;
-  dom.memeGrid.classList.toggle("is-list", state.layout === "list");
-  clear(dom.memeGrid);
-  if (!items.length) {
-    dom.memeGrid.append(emptyState("没有匹配的表情", "换个关键词，或把筛选条件放宽一些。", "i-search"));
-  } else {
-    for (const item of items) {
-      dom.memeGrid.append(memeCard(item));
-    }
-  }
-  dom.catalogCount.textContent = formatNumber(total) + " 个结果";
-  const from = total ? offset + 1 : 0;
-  const to = Math.min(offset + limit, total);
-  dom.pageStatus.textContent = total ? from + " - " + to + " / " + formatNumber(total) : "0 / 0";
-  dom.previousPage.disabled = offset <= 0;
-  dom.nextPage.disabled = offset + limit >= total;
-  renderBulkBar();
-}
-
-function renderBulkBar() {
-  const count = state.selection.size;
-  dom.bulkBar.classList.toggle("is-open", state.selectMode);
-  dom.bulkCount.textContent = String(count);
-  const busy = Boolean(state.bulkBusy);
-  dom.bulkEnable.disabled = busy || count === 0;
-  dom.bulkDisable.disabled = busy || count === 0;
-  dom.bulkClear.disabled = busy || count === 0;
-  const pageKeys = state.catalog.items.map((item) => item.key);
-  const allPicked = pageKeys.length > 0 && pageKeys.every((key) => state.selection.has(key));
-  dom.bulkSelectPage.disabled = busy || pageKeys.length === 0;
-  dom.bulkSelectPage.textContent = allPicked ? "取消本页" : "本页全选";
-}
-
-function togglePageSelection() {
-  const pageKeys = state.catalog.items.map((item) => item.key);
-  if (!pageKeys.length) {
+function togglePick(key) {
+  const picked = state.library.picked;
+  if (picked.has(key)) picked.delete(key);
+  else if (picked.size >= BULK_LIMIT) {
+    toast("一次最多选择 " + BULK_LIMIT + " 个表情", "error");
     return;
-  }
-  if (pageKeys.every((key) => state.selection.has(key))) {
-    for (const key of pageKeys) {
-      state.selection.delete(key);
-    }
-  } else {
-    let truncated = false;
-    for (const key of pageKeys) {
-      if (state.selection.size >= BULK_LIMIT && !state.selection.has(key)) {
-        truncated = true;
-        continue;
-      }
-      state.selection.add(key);
-    }
-    if (truncated) {
-      toast("单次最多选择 " + BULK_LIMIT + " 个表情，已选到上限。", "error");
-    }
-  }
-  renderCatalog();
+  } else picked.add(key);
+  renderLibraryGrid();
+  renderBulkbar();
 }
 
-function toggleSelection(key) {
-  if (state.selection.has(key)) {
-    state.selection.delete(key);
-  } else {
-    if (state.selection.size >= BULK_LIMIT) {
-      toast("单次最多选择 " + BULK_LIMIT + " 个表情。", "error");
-      return;
+function renderBulkbar() {
+  const bar = $("bulkbar");
+  const picked = state.library.picked;
+  bar.hidden = !state.library.selecting;
+  $("bulk-count").textContent = "已选 " + picked.size + " 项";
+  $("bulk-enable").disabled = !picked.size;
+  $("bulk-disable").disabled = !picked.size;
+}
+
+function fillSelect(node, values, allLabel, labeller) {
+  const current = node.value;
+  clear(node);
+  const first = el("option", null, allLabel);
+  first.value = "";
+  node.appendChild(first);
+  for (const value of values) {
+    const option = el("option", null, labeller ? labeller(value) : value);
+    option.value = value;
+    node.appendChild(option);
+  }
+  node.value = values.includes(current) ? current : "";
+}
+
+function renderLibraryGrid() {
+  const grid = clear($("lib-grid"));
+  grid.dataset.view = state.library.view;
+  for (const item of state.library.items) grid.appendChild(memeCard(item));
+  $("lib-empty").hidden = state.library.items.length > 0;
+}
+
+function renderLibraryMeta() {
+  const lib = state.library;
+  const from = lib.total ? lib.offset + 1 : 0;
+  const to = Math.min(lib.offset + PAGE_SIZE, lib.total);
+  $("lib-meta").textContent = lib.loading ? "载入中…" : lib.total ? from + "-" + to + " / 共 " + lib.total + " 项" : "没有匹配的表情";
+  const page = Math.floor(lib.offset / PAGE_SIZE) + 1;
+  const pages = Math.max(1, Math.ceil(lib.total / PAGE_SIZE));
+  $("lib-page").textContent = page + " / " + pages;
+  $("lib-prev").disabled = lib.offset <= 0;
+  $("lib-next").disabled = lib.offset + PAGE_SIZE >= lib.total;
+  $("lib-search-clear").hidden = !lib.query;
+}
+
+async function loadLibrary(resetOffset) {
+  const lib = state.library;
+  if (resetOffset) {
+    lib.offset = 0;
+  }
+  lib.loading = true;
+  const token = (lib.token += 1);
+  renderLibraryMeta();
+  try {
+    const payload = await apiGet("dashboard/memes", {
+      q: lib.query,
+      tag: lib.tag,
+      status: lib.status,
+      source: lib.source,
+      sort: lib.sort,
+      offset: lib.offset,
+      limit: PAGE_SIZE,
+    });
+    if (token !== lib.token) return;
+    lib.items = payload.items || [];
+    lib.total = Number(payload.total) || 0;
+    if (Array.isArray(payload.tags)) fillSelect($("lib-tag"), payload.tags, "全部标签");
+    if (Array.isArray(payload.sources)) fillSelect($("lib-source"), payload.sources, "全部来源", (value) => sourceOf(value).label);
+    renderLibraryGrid();
+  } catch (error) {
+    reportError(error, "表情列表");
+  } finally {
+    if (token === lib.token) {
+      lib.loading = false;
+      renderLibraryMeta();
+      updateStatusLine();
     }
-    state.selection.add(key);
   }
-  renderCatalog();
 }
 
-function setSelectMode(enabled) {
-  state.selectMode = enabled;
-  dom.selectModeButton.setAttribute("aria-pressed", String(enabled));
-  dom.selectModeButton.classList.toggle("is-primary", enabled);
-  if (!enabled) {
-    state.selection.clear();
-  }
-  renderCatalog();
-}
+/* ---------- 详情抽屉 ---------- */
 
-/* --- 详情抽屉 ------------------------------------------------------------ */
+let drawerReturn = null;
 
-let lastFocused = null;
-
-function openDrawer(key) {
-  lastFocused = document.activeElement;
-  dom.drawerTitle.textContent = key;
-  dom.drawerEyebrow.textContent = "MEME DETAIL";
-  dom.drawer.hidden = false;
-  dom.drawerPanel.focus({ preventScroll: true });
+function openDrawer(title, eyebrow) {
+  drawerReturn = document.activeElement;
+  $("drawer-eyebrow").textContent = eyebrow || "MEME DETAIL";
+  $("drawer-title").textContent = title;
+  $("drawer").hidden = false;
+  $("drawer-panel").focus();
 }
 
 function closeDrawer() {
-  dom.drawer.hidden = true;
-  state.detailKey = "";
-  state.detail = null;
-  clear(dom.drawerBody);
-  if (lastFocused instanceof HTMLElement) {
-    lastFocused.focus({ preventScroll: true });
-  }
+  $("drawer").hidden = true;
+  clear($("drawer-body"));
+  if (drawerReturn && drawerReturn.focus) drawerReturn.focus();
+  drawerReturn = null;
 }
 
-async function openDetail(key) {
-  const target = String(key || "").trim();
-  if (!target) {
-    return;
-  }
-  state.detailKey = target;
-  openDrawer(target);
-  clear(dom.drawerBody);
-  dom.drawerBody.append(skeleton(3, true));
-  const requestId = ++state.requests.detail;
-  try {
-    const data = await apiGet("dashboard/meme", { key: target });
-    if (requestId !== state.requests.detail) {
-      return;
-    }
-    state.detail = data.item;
-    renderDetail(data.item);
-  } catch (error) {
-    if (requestId !== state.requests.detail) {
-      return;
-    }
-    clear(dom.drawerBody);
-    const message = make("p", "region-message is-error", error.message || "读取详情失败。");
-    dom.drawerBody.append(message);
-  }
-}
-
-function commandPrefix() {
-  const prefix = String(state.overview?.trigger_prefix ?? "meme").trim();
-  if (!prefix) {
-    return "/";
-  }
-  return "/" + prefix + (/[A-Za-z0-9]$/.test(prefix) ? " " : "");
-}
-
-function commandExamples(detail) {
-  const trigger = (detail.keywords || []).find(Boolean) || detail.key;
-  const needImages = Number(detail.images?.min) || 0;
-  const needTexts = Number(detail.texts?.min) || 0;
-  const hints = [];
-  if (needImages) {
-    hints.push("需要 " + (detail.images?.label ?? needImages) + " 张图片（可 @ 某人、引用消息或直接发图）");
-  }
-  if (needTexts) {
-    hints.push("需要 " + (detail.texts?.label ?? needTexts) + " 段文本");
-  }
-  const examples = [];
-  const base = trigger + (needTexts ? " " + (detail.default_texts || []).slice(0, needTexts).map((text) => text || "文本").join(" ") : "");
-  examples.push({ command: base, hint: hints.join("，") || "直接发送即可生成" });
-  examples.push({ command: commandPrefix() + base, hint: "带插件前缀的等价写法，适合关键词冲突时使用" });
-
-  const options = detail.options || [];
-  const bareOption = options.find((option) => (option.aliases || []).length);
-  if (bareOption) {
-    examples.push({
-      command: trigger + " " + bareOption.aliases[0],
-      hint: "直接跟上选项名即可，例如「" + bareOption.name + "」的可选值：" + (bareOption.choices || []).join("、"),
-    });
-  }
-  const flagOption = options.find((option) => (option.flags || []).length);
-  if (flagOption) {
-    const flag = flagOption.flags[0];
-    examples.push({
-      command: trigger + " " + (flagOption.type === "bool" ? flag : flag + " " + (formatOptionDefault(flagOption.default) === "未设置" ? "值" : formatOptionDefault(flagOption.default))),
-      hint: "使用参数开关：" + (flagOption.description || flagOption.name),
-    });
-  }
-  return examples;
-}
-
-function formatOptionDefault(value) {
-  if (value === undefined || value === null || value === "") {
-    return "未设置";
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  if (Array.isArray(value)) {
-    return value.join(", ");
-  }
-  return String(value);
-}
-
-function section(title) {
-  const node = make("section", "detail-section");
-  node.append(make("h3", "", title));
-  return node;
-}
-
-function commandLine(example) {
-  const line = make("div", "command-line");
-  const code = make("code");
-  code.append(document.createTextNode(example.command));
-  if (example.hint) {
-    code.append(make("span", "command-hint", example.hint));
-  }
-  const copy = make("button", "btn is-icon is-quiet");
-  copy.type = "button";
-  copy.title = "复制命令";
-  copy.setAttribute("aria-label", "复制命令 " + example.command);
-  copy.append(icon("i-copy", 15));
-  copy.addEventListener("click", () => void copyText(example.command));
-  line.append(code, copy);
-  return line;
-}
-
-async function copyText(text) {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const area = make("textarea");
-      area.value = text;
-      area.setAttribute("readonly", "readonly");
-      area.style.position = "fixed";
-      area.style.opacity = "0";
-      document.body.append(area);
-      area.select();
-      document.execCommand("copy");
-      area.remove();
-    }
-    toast("已复制：" + text);
-  } catch {
-    toast("复制失败，请手动选择文本。", "error");
-  }
-}
-
-function specCell(label, value) {
-  const cell = make("div", "spec-cell");
-  cell.append(make("dt", "", label), make("dd", "", value));
-  return cell;
-}
-
-function renderDetail(detail) {
-  clear(dom.drawerBody);
-  dom.drawerTitle.textContent = detail.key;
-  dom.drawerEyebrow.textContent = sourceLabel(detail.source).toUpperCase() + " · MEME DETAIL";
-
-  // 状态与开关
-  const statusSection = section("状态");
-  const statusRow = make("div", "detail-row");
-  const toggle = make("button", "switch");
-  toggle.type = "button";
-  toggle.setAttribute("role", "switch");
-  toggle.setAttribute("aria-checked", String(detail.enabled));
-  toggle.setAttribute("aria-label", (detail.enabled ? "禁用 " : "启用 ") + detail.key);
-  toggle.addEventListener("click", () => void setEnabled(detail.key, !detail.enabled, toggle));
-  statusRow.append(
-    chip(detail.enabled ? "已启用" : "已禁用", detail.enabled ? "is-primary" : "is-danger"),
-    chip(sourceLabel(detail.source), "is-secondary"),
-    make("span", "", detail.enabled ? "当前可被触发" : "当前不响应任何触发词"),
-    toggle,
-  );
-  statusSection.append(statusRow);
-
-  const specs = make("dl", "spec-grid");
-  specs.append(
-    specCell("图片需求", detail.images?.label ?? "0"),
-    specCell("文本需求", detail.texts?.label ?? "0"),
-    specCell("可选参数", formatNumber((detail.options || []).length)),
-    specCell("内置素材", detail.has_materials ? formatNumber(detail.materials?.total || 0) : "无"),
-  );
-  statusSection.append(specs);
-  dom.drawerBody.append(statusSection);
-
-  // 触发词
-  const triggerSection = section("触发词");
-  const triggers = make("div", "tag-list");
-  const keywords = (detail.keywords || []).filter(Boolean);
-  if (keywords.length) {
-    for (const keyword of keywords) {
-      const item = make("button", "chip is-mono");
-      item.type = "button";
-      item.textContent = keyword;
-      item.title = "复制触发词";
-      item.addEventListener("click", () => void copyText(keyword));
-      triggers.append(item);
-    }
-  } else {
-    triggers.append(make("span", "region-message", "该表情没有关键词，只能用 " + commandPrefix() + detail.key + " 触发。"));
-  }
-  triggerSection.append(triggers);
-  if ((detail.tags || []).length) {
-    const tags = make("div", "tag-list");
-    for (const tag of detail.tags) {
-      const item = make("button", "chip");
-      item.type = "button";
-      item.append(icon("i-tag", 12), make("span", "", tag));
-      item.title = "在表情库中按此标签筛选";
-      item.addEventListener("click", () => {
-        state.filters.tag = tag;
-        state.filters.q = "";
-        dom.search.value = "";
-        closeDrawer();
-        setView("library");
-        void loadCatalog({ resetOffset: true });
-      });
-      tags.append(item);
-    }
-    triggerSection.append(tags);
-  }
-  dom.drawerBody.append(triggerSection);
-
-  // 命令示例
-  const commandSection = section("命令示例");
-  const block = make("div", "command-block");
-  for (const example of commandExamples(detail)) {
-    block.append(commandLine(example));
-  }
-  commandSection.append(block);
-  dom.drawerBody.append(commandSection);
-
-  // 预览
-  const previewSection = section("效果预览");
-  const frame = make("div", "preview-frame");
-  frame.append(make("p", "region-message", "正在生成预览..."));
-  previewSection.append(frame);
-  dom.drawerBody.append(previewSection);
-  void loadPreview(detail.key, frame);
-
-  // 参数
-  const options = detail.options || [];
-  if (options.length) {
-    const optionSection = section("可选参数 " + options.length);
-    const list = make("div", "option-list");
-    for (const option of options) {
-      list.append(optionRow(option));
-    }
-    optionSection.append(list);
-    dom.drawerBody.append(optionSection);
-  }
-
-  // 默认文本
-  if ((detail.default_texts || []).length) {
-    const textSection = section("默认文本");
-    const list = make("div", "tag-list");
-    for (const text of detail.default_texts) {
-      list.append(chip(text, "is-mono"));
-    }
-    textSection.append(list);
-    dom.drawerBody.append(textSection);
-  }
-
-  // 素材
-  if (detail.has_materials && (detail.materials?.items || []).length) {
-    const materialSection = section("内置素材 " + formatNumber(detail.materials.total));
-    const grid = make("div", "material-grid");
-    for (const material of detail.materials.items) {
-      grid.append(materialThumb(detail.key, material));
-    }
-    materialSection.append(grid);
-    if (detail.materials.truncated) {
-      materialSection.append(make("p", "region-message", "素材较多，仅展示前 " + detail.materials.items.length + " 个。"));
-    }
-    dom.drawerBody.append(materialSection);
-    observeMaterials(grid);
-  }
-}
-
-function optionRow(option) {
-  const row = make("div", "option-row");
-  const head = make("div", "option-head");
-  head.append(make("strong", "", option.name), make("span", "option-type", option.type || "text"));
-  const flags = [...(option.flags || []), ...(option.aliases || [])].filter(Boolean);
-  if (flags.length) {
-    head.append(chip(flags.join(" / "), "is-mono"));
-  }
-  row.append(head);
-  if (option.description) {
-    row.append(make("p", "option-desc", option.description));
-  }
-  const meta = make("div", "option-meta");
-  meta.append(make("span", "", "默认 " + formatOptionDefault(option.default)));
-  if ((option.choices || []).length) {
-    meta.append(make("span", "", "可选 " + option.choices.join(" | ")));
-  }
-  if (option.minimum !== null && option.minimum !== undefined) {
-    meta.append(make("span", "", "最小 " + option.minimum));
-  }
-  if (option.maximum !== null && option.maximum !== undefined) {
-    meta.append(make("span", "", "最大 " + option.maximum));
-  }
-  row.append(meta);
-  return row;
-}
-
-async function loadPreview(key, frame) {
-  const cached = state.previewCache.get(key);
-  if (cached) {
-    fillPreview(frame, key, cached);
-    return;
-  }
-  try {
-    const data = await apiGet("dashboard/preview", { key });
-    if (state.detailKey !== key) {
-      return;
-    }
-    state.previewCache.set(key, data.data_url);
-    if (state.previewCache.size > 40) {
-      state.previewCache.delete(state.previewCache.keys().next().value);
-    }
-    fillPreview(frame, key, data.data_url);
-  } catch (error) {
-    if (state.detailKey !== key) {
-      return;
-    }
-    clear(frame);
-    frame.append(make("p", "region-message is-error", error.message || "预览生成失败。"));
-  }
-}
-
-function fillPreview(frame, key, dataUrl) {
-  clear(frame);
-  const image = make("img");
-  image.src = dataUrl;
-  image.alt = key + " 的效果预览";
-  image.loading = "lazy";
-  image.addEventListener("click", () => openLightbox(dataUrl, key + " · 效果预览"));
-  frame.append(image);
-}
-
-function materialThumb(key, material) {
-  const button = make("button", "material-thumb is-loading");
-  button.type = "button";
-  button.dataset.key = key;
-  button.dataset.name = material.name;
-  button.title = material.name + " · " + formatBytes(material.size);
-  button.setAttribute("aria-label", "查看素材 " + material.name);
-  button.append(make("span", "material-name", material.name));
-  return button;
-}
-
-let materialObserver = null;
-const materialQueue = [];
-let materialActive = 0;
-
-function observeMaterials(grid) {
-  materialObserver?.disconnect();
-  materialObserver = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) {
-        if (!entry.isIntersecting) {
-          continue;
-        }
-        materialObserver?.unobserve(entry.target);
-        materialQueue.push(entry.target);
-        pumpMaterialQueue();
-      }
-    },
-    { root: dom.drawerBody, rootMargin: "160px" },
-  );
-  for (const thumb of grid.querySelectorAll(".material-thumb")) {
-    materialObserver.observe(thumb);
-  }
-}
-
-function pumpMaterialQueue() {
-  while (materialActive < 3 && materialQueue.length) {
-    const target = materialQueue.shift();
-    materialActive += 1;
-    void loadMaterial(target).finally(() => {
-      materialActive -= 1;
-      pumpMaterialQueue();
-    });
-  }
-}
-
-async function loadMaterial(button) {
-  const key = button.dataset.key || "";
-  const name = button.dataset.name || "";
-  const cacheKey = key + "::" + name;
-  try {
-    let dataUrl = state.materialCache.get(cacheKey);
-    if (!dataUrl) {
-      const data = await apiGet("dashboard/material", { key, name });
-      dataUrl = data.data_url;
-      state.materialCache.set(cacheKey, dataUrl);
-      if (state.materialCache.size > 200) {
-        state.materialCache.delete(state.materialCache.keys().next().value);
-      }
-    }
-    if (!button.isConnected) {
-      return;
-    }
-    const image = make("img");
-    image.src = dataUrl;
-    image.alt = name;
-    button.classList.remove("is-loading");
-    button.prepend(image);
-    button.addEventListener("click", () => openLightbox(dataUrl, key + " · " + name));
-  } catch {
-    if (button.isConnected) {
-      button.classList.remove("is-loading");
-      button.classList.add("is-error");
-      button.title = name + " 读取失败";
-    }
-  }
-}
-
-/* --- 灯箱 ---------------------------------------------------------------- */
-
-function openLightbox(dataUrl, caption) {
-  dom.lightboxImage.src = dataUrl;
-  dom.lightboxImage.alt = caption;
-  dom.lightboxCaption.textContent = caption;
-  dom.lightbox.hidden = false;
-  dom.lightboxClose.focus({ preventScroll: true });
+function openLightbox(src, caption) {
+  $("lightbox-image").src = src;
+  $("lightbox-caption").textContent = caption || "";
+  $("lightbox").hidden = false;
+  $("lightbox-close").focus();
 }
 
 function closeLightbox() {
-  dom.lightbox.hidden = true;
-  dom.lightboxImage.removeAttribute("src");
+  $("lightbox").hidden = true;
+  $("lightbox-image").src = "";
 }
 
-/* --- 使用记录 ------------------------------------------------------------ */
-
-function renderSessions() {
-  clear(dom.sessionList);
-  const items = state.history.conversations || [];
-  if (!items.length) {
-    dom.sessionList.append(emptyState("暂无会话记录", "有人成功生成表情后，这里会出现所在会话。"));
-    return;
-  }
-  const sorted = [...items].sort((left, right) => (Number(right.count) || 0) - (Number(left.count) || 0));
-  for (const item of sorted) {
-    const row = make("button", "session-row");
-    row.type = "button";
-    row.style.setProperty("--hue", String(hueOf(item.session)));
-    row.setAttribute("aria-pressed", String(state.session === item.session));
-    const avatar = make("span", "session-avatar", glyphOf(shortSession(item.session)));
-    avatar.setAttribute("aria-hidden", "true");
-    const copy = make("div", "session-copy");
-    copy.append(
-      make("strong", "", shortSession(item.session)),
-      make("small", "", (item.platform || "--") + " · 最近 " + (item.last_key || "--") + " · " + relativeTime(item.last_used_at)),
-    );
-    row.append(avatar, copy, chip(formatNumber(item.count) + " 次", "is-mono"));
-    row.addEventListener("click", () => {
-      state.session = state.session === item.session ? "" : item.session;
-      void loadHistory();
-    });
-    dom.sessionList.append(row);
-  }
-}
-
-function renderHistory() {
-  const items = state.history.items || [];
-  dom.recordsCount.textContent = formatNumber(items.length) + " 条";
-  clear(dom.historyBody);
-  if (!items.length) {
-    dom.historyBody.append(emptyState("暂无记录", "被选中的会话还没有生成过表情。"));
-    return;
-  }
-  if (state.recordsMode === "table") {
-    dom.historyBody.append(historyTable(items));
-    return;
-  }
-  const timeline = make("div", "timeline");
-  for (const group of groupByDay(items)) {
-    timeline.append(make("p", "timeline-day", group.label));
-    for (const record of group.items) {
-      timeline.append(timelineRow(record));
+function commandLine(text) {
+  const node = el("div", "cmd");
+  node.appendChild(icon("i-cursor"));
+  node.appendChild(el("span", null, text));
+  const copy = el("button", "btn is-icon is-tiny is-quiet");
+  copy.type = "button";
+  copy.title = "复制";
+  copy.appendChild(icon("i-copy"));
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("已复制指令", "ok");
+    } catch {
+      toast("浏览器拒绝了复制请求", "error");
     }
-  }
-  dom.historyBody.append(timeline);
+  });
+  node.appendChild(copy);
+  return node;
 }
 
-function historyTable(items) {
-  const wrap = make("div", "table-wrap");
-  const table = make("table", "history-table");
-  const head = make("thead");
-  const headRow = make("tr");
-  for (const [label, className] of [["时间", "col-time"], ["用户", "col-who"], ["触发词", "col-key"], ["Meme", "col-key"], ["会话", "col-who"]]) {
-    const cell = make("th", className, label);
-    cell.scope = "col";
-    headRow.append(cell);
+function optionItem(spec) {
+  const item = el("div", "opt-item");
+  const head = el("div", "opt-head");
+  head.appendChild(el("code", null, spec.name));
+  head.appendChild(el("span", "mono", spec.type || "text"));
+  if (spec.default !== null && spec.default !== undefined && spec.default !== "") {
+    head.appendChild(el("span", "mono", "默认 " + spec.default));
   }
-  head.append(headRow);
-  const body = make("tbody");
-  for (const record of items) {
-    const row = make("tr");
-    row.append(make("td", "col-time", formatDateTime(record.created_at)));
-    row.append(make("td", "col-who", record.sender_name || record.sender_id || "--"));
-    row.append(make("td", "col-key", record.trigger || "--"));
-    const keyCell = make("td", "col-key");
-    const link = make("button", "", record.key);
-    link.type = "button";
-    link.addEventListener("click", () => void openDetail(record.key));
-    keyCell.append(link);
-    row.append(keyCell);
-    row.append(make("td", "col-who", (record.platform || "--") + " / " + shortSession(record.session)));
-    body.append(row);
+  item.appendChild(head);
+  if (spec.description) item.appendChild(el("div", "opt-desc", spec.description));
+  const hints = [];
+  if (spec.choices && spec.choices.length) hints.push("取值：" + spec.choices.join(" / "));
+  if (spec.minimum !== null && spec.minimum !== undefined) hints.push("最小 " + spec.minimum);
+  if (spec.maximum !== null && spec.maximum !== undefined) hints.push("最大 " + spec.maximum);
+  if (spec.aliases && spec.aliases.length) hints.push("直接写：" + spec.aliases.join(" / "));
+  if (spec.flags && spec.flags.length) hints.push("开关：" + spec.flags.join(" / "));
+  if (hints.length) item.appendChild(el("div", "opt-desc mono", hints.join("　")));
+  return item;
+}
+
+function detailSection(title, eyebrow) {
+  const card = el("section", "card");
+  if (eyebrow) card.appendChild(el("p", "eyebrow mono", eyebrow));
+  if (title) card.appendChild(el("h3", null, title));
+  return card;
+}
+
+async function openMeme(key) {
+  openDrawer(key, "MEME DETAIL");
+  const body = clear($("drawer-body"));
+  const loading = el("div", "skeleton");
+  loading.style.height = "220px";
+  body.appendChild(loading);
+  try {
+    const payload = await apiGet("dashboard/meme", { key });
+    renderMemeDetail(payload.item);
+  } catch (error) {
+    clear(body).appendChild(el("div", "note is-danger", (error && error.message) || "加载失败"));
   }
-  table.append(head, body);
-  wrap.append(table);
+}
+
+function renderMemeDetail(item) {
+  const body = clear($("drawer-body"));
+  const info = sourceOf(item.source);
+  const prefix = (state.overview && state.overview.trigger_prefix) || "meme";
+
+  const preview = el("div", "drawer-preview checker");
+  const cached = previewCache.get(item.key);
+  if (cached) {
+    const image = el("img");
+    image.src = cached;
+    image.alt = item.key;
+    image.addEventListener("click", () => openLightbox(cached, item.key));
+    preview.appendChild(image);
+  } else {
+    const button = el("button", "btn is-accent");
+    button.type = "button";
+    button.appendChild(icon("i-play"));
+    button.appendChild(el("span", null, "渲染预览"));
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      clear(button).appendChild(el("span", null, "渲染中…"));
+      try {
+        const payload = await apiGet("dashboard/preview", { key: item.key });
+        previewCache.set(item.key, payload.data_url);
+        renderMemeDetail(item);
+      } catch (error) {
+        reportError(error, "预览");
+        renderMemeDetail(item);
+      }
+    });
+    preview.appendChild(button);
+  }
+  body.appendChild(preview);
+
+  const chips = el("div", "chip-row");
+  const sourceTag = el("span", "chip");
+  const dot = el("i", "dot-source");
+  dot.style.setProperty("--src-color", info.color);
+  sourceTag.appendChild(dot);
+  sourceTag.appendChild(el("span", null, info.label));
+  chips.appendChild(sourceTag);
+  chips.appendChild(el("span", "chip " + (item.enabled ? "is-on" : "is-off"), item.enabled ? "已启用" : "已禁用"));
+  const toggle = el("button", "btn is-tiny " + (item.enabled ? "is-danger" : "is-accent"));
+  toggle.type = "button";
+  toggle.appendChild(icon(item.enabled ? "i-close" : "i-check"));
+  toggle.appendChild(el("span", null, item.enabled ? "禁用此表情" : "启用此表情"));
+  toggle.addEventListener("click", async () => {
+    toggle.disabled = true;
+    try {
+      const payload = await apiPost("dashboard/meme-enabled", { key: item.key, enabled: !item.enabled });
+      toast(payload.item.enabled ? "已启用 " + item.key : "已禁用 " + item.key, "ok");
+      renderMemeDetail(payload.item);
+      await loadLibrary(false);
+      await loadOverview();
+    } catch (error) {
+      reportError(error, "启停失败");
+      toggle.disabled = false;
+    }
+  });
+  chips.appendChild(toggle);
+  body.appendChild(chips);
+
+  const basics = detailSection("基础信息", "SPEC");
+  const rows = el("dl", "rows");
+  rows.appendChild(row("Key", item.key, "mono"));
+  rows.appendChild(row("来源", info.label));
+  rows.appendChild(row("需要图片", item.images ? item.images.label + " 张" : "--", "mono"));
+  rows.appendChild(row("需要文字", item.texts ? item.texts.label + " 段" : "--", "mono"));
+  rows.appendChild(row("标签", (item.tags || []).join("、") || "无"));
+  basics.appendChild(rows);
+  body.appendChild(basics);
+
+  const usage = detailSection("怎么触发", "USAGE");
+  const keyword = (item.keywords && item.keywords[0]) || item.key;
+  const cmds = el("div", "form-grid");
+  cmds.appendChild(commandLine(prefix + " " + keyword));
+  cmds.appendChild(commandLine(keyword));
+  if (item.texts && item.texts.max > 0) {
+    cmds.appendChild(commandLine(keyword + " 你想写的文字"));
+  }
+  const bare = (item.options || []).find((spec) => spec.aliases && spec.aliases.length);
+  if (bare) cmds.appendChild(commandLine(keyword + " " + bare.aliases[0]));
+  const flag = (item.options || []).find((spec) => spec.flags && spec.flags.length);
+  if (flag) cmds.appendChild(commandLine(keyword + " " + flag.flags[0]));
+  usage.appendChild(cmds);
+  if (item.keywords && item.keywords.length > 1) {
+    const kwRow = el("div", "chip-row is-tight");
+    for (const word of item.keywords) kwRow.appendChild(el("span", "chip", word));
+    usage.appendChild(kwRow);
+  }
+  body.appendChild(usage);
+
+  if (item.default_texts && item.default_texts.length) {
+    const section = detailSection("默认文字", "DEFAULT TEXT");
+    const list = el("div", "chip-row is-tight");
+    for (const text of item.default_texts) list.appendChild(el("span", "chip", text));
+    section.appendChild(list);
+    body.appendChild(section);
+  }
+
+  if (item.options && item.options.length) {
+    const section = detailSection("可用参数", "OPTIONS");
+    const list = el("div", "opt-list");
+    for (const spec of item.options) list.appendChild(optionItem(spec));
+    section.appendChild(list);
+    section.appendChild(el("p", "opt-desc", "参数直接跟在触发词后面，例如「" + keyword + " " + ((item.options[0].aliases && item.options[0].aliases[0]) || item.options[0].name) + "」。"));
+    body.appendChild(section);
+  }
+
+  const materials = item.materials || {};
+  if (materials.total) {
+    const section = detailSection("素材图片", "MATERIALS");
+    section.appendChild(el("p", "opt-desc", "共 " + materials.total + " 张" + (materials.truncated ? "（仅列出前 " + (materials.items || []).length + " 张）" : "")));
+    const grid = el("div", "mat-grid");
+    for (const material of materials.items || []) {
+      const cell = el("button", "mat-cell checker");
+      cell.type = "button";
+      cell.title = material.name;
+      const cacheKey = item.key + "/" + material.name;
+      const known = materialCache.get(cacheKey);
+      const paint = (dataUrl) => {
+        const image = el("img");
+        image.src = dataUrl;
+        image.alt = material.name;
+        image.loading = "lazy";
+        clear(cell).appendChild(image);
+        cell.onclick = () => openLightbox(dataUrl, material.name);
+      };
+      if (known) paint(known);
+      else {
+        cell.appendChild(el("span", "mono", material.name.slice(0, 6)));
+        cell.addEventListener("click", async () => {
+          try {
+            const payload = await apiGet("dashboard/material", { key: item.key, name: material.name });
+            materialCache.set(cacheKey, payload.data_url);
+            paint(payload.data_url);
+            openLightbox(payload.data_url, material.name);
+          } catch (error) {
+            reportError(error, "素材");
+          }
+        }, { once: true });
+      }
+      grid.appendChild(cell);
+    }
+    section.appendChild(grid);
+    body.appendChild(section);
+  }
+}
+
+
+/* ---------- 工作台 ---------- */
+
+const FIT_LABEL = { cover: "裁切填满", contain: "完整放入", stretch: "拉伸变形" };
+const ALIGN_LABEL = { left: "左对齐", center: "居中", right: "右对齐" };
+const VALIGN_LABEL = { top: "顶部", middle: "居中", bottom: "底部" };
+
+function uniqueKey(base) {
+  const taken = new Set(state.maker.templates.map((item) => item.key));
+  if (!taken.has(base)) return base;
+  for (let index = 2; index < 999; index += 1) {
+    const candidate = base + "_" + index;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return base + "_" + Date.now();
+}
+
+function blankDraft() {
+  const key = uniqueKey("my_meme");
+  return {
+    key,
+    title: "我的表情",
+    keywords: [key],
+    width: 640,
+    height: 640,
+    background: "#101418",
+    base: null,
+    overlay: null,
+    tags: [],
+    author: "",
+    slots: [
+      { type: "image", x: 0, y: 0, width: 640, height: 640, fit: "cover" },
+    ],
+  };
+}
+
+function resetMakerAssets() {
+  const maker = state.maker;
+  maker.baseUpload = null;
+  maker.overlayUpload = null;
+  maker.baseUrl = null;
+  maker.overlayUrl = null;
+  maker.removeBase = false;
+  maker.removeOverlay = false;
+}
+
+function setDraft(draft, savedKey) {
+  state.maker.draft = draft;
+  state.maker.savedKey = savedKey || null;
+  state.maker.activeSlot = draft && draft.slots && draft.slots.length ? 0 : -1;
+  state.maker.dirty = !savedKey;
+  renderMaker();
+}
+
+function markDirty() {
+  state.maker.dirty = true;
+  updateStatusLine();
+}
+
+function renderMakerList() {
+  const list = clear($("maker-list"));
+  $("maker-count").textContent = String(state.maker.templates.length);
+  $("tab-badge-maker").textContent = String(state.maker.templates.length);
+  if (!state.maker.templates.length) {
+    list.appendChild(el("li", "empty is-inline", "还没有自制模板"));
+    return;
+  }
+  for (const item of state.maker.templates) {
+    const li = el("li");
+    const button = el("button", "side-item");
+    button.type = "button";
+    if (state.maker.savedKey === item.key) button.classList.add("is-active");
+    const copy = el("span");
+    copy.appendChild(el("b", null, item.title || item.key));
+    copy.appendChild(el("small", "mono", item.key + " · 图 " + item.image_slots + " / 字 " + item.text_slots));
+    button.appendChild(copy);
+    button.appendChild(el("span", "side-flag", item.loaded ? "已加载" : "未加载"));
+    button.addEventListener("click", async () => {
+      if (state.maker.dirty && !(await askConfirm("当前草稿尚未保存，确定切换模板？", { confirmText: "切换" }))) return;
+      openTemplate(item.key).catch((error) => reportError(error, "读取模板"));
+    });
+    li.appendChild(button);
+    list.appendChild(li);
+  }
+}
+
+function canvasScale(draft) {
+  const wrap = $("canvas-wrap");
+  const available = Math.max(200, wrap.clientWidth - 40);
+  return Math.min(1, available / draft.width);
+}
+
+function slotLabel(draft, index) {
+  const slot = draft.slots[index];
+  let counter = 0;
+  for (let cursor = 0; cursor <= index; cursor += 1) {
+    if (draft.slots[cursor].type === slot.type) counter += 1;
+  }
+  return (slot.type === "image" ? "图片 " : "文字 ") + counter;
+}
+
+let stageBaseNode = null;
+let stageOverlayNode = null;
+
+/* The stage is rebuilt with clear(), which detaches the two <img> layers.
+   Detached nodes are invisible to getElementById, so keep live references. */
+function stageLayers() {
+  if (!stageBaseNode) stageBaseNode = $("canvas-base");
+  if (!stageOverlayNode) stageOverlayNode = $("canvas-overlay");
+  return [stageBaseNode, stageOverlayNode];
+}
+
+function renderStage() {
+  const draft = state.maker.draft;
+  const canvas = $("maker-canvas");
+  const title = $("stage-title");
+  if (!draft) {
+    title.textContent = "未选择模板";
+    canvas.style.width = "320px";
+    canvas.style.height = "200px";
+    canvas.style.background = "var(--surface-3)";
+    const [emptyBase, emptyOverlay] = stageLayers();
+    clear(canvas);
+    canvas.appendChild(emptyBase);
+    canvas.appendChild(emptyOverlay);
+    emptyBase.hidden = true;
+    emptyOverlay.hidden = true;
+    $("stage-zoom").textContent = "--";
+    return;
+  }
+
+  title.textContent = (draft.title || draft.key) + " · " + draft.width + "×" + draft.height;
+  const scale = canvasScale(draft);
+  state.maker.scale = scale;
+  $("stage-zoom").textContent = Math.round(scale * 100) + "%";
+  canvas.style.width = Math.round(draft.width * scale) + "px";
+  canvas.style.height = Math.round(draft.height * scale) + "px";
+  canvas.style.background = draft.background || "#000";
+  canvas.classList.toggle("is-grid", state.maker.grid);
+
+  const [baseImage, overlayImage] = stageLayers();
+  clear(canvas);
+  canvas.appendChild(baseImage);
+  canvas.appendChild(overlayImage);
+  const baseSrc = state.maker.baseUpload || (state.maker.removeBase ? null : state.maker.baseUrl);
+  const overlaySrc = state.maker.overlayUpload || (state.maker.removeOverlay ? null : state.maker.overlayUrl);
+  baseImage.hidden = !baseSrc;
+  if (baseSrc) baseImage.src = baseSrc;
+  overlayImage.hidden = !overlaySrc;
+  if (overlaySrc) overlayImage.src = overlaySrc;
+
+  draft.slots.forEach((slot, index) => {
+    const node = el("div", "slot");
+    node.style.setProperty("--slot-color", SLOT_COLOR[slot.type] || "#38bdf8");
+    node.style.left = (slot.x / draft.width) * 100 + "%";
+    node.style.top = (slot.y / draft.height) * 100 + "%";
+    node.style.width = (slot.width / draft.width) * 100 + "%";
+    node.style.height = (slot.height / draft.height) * 100 + "%";
+    if (index === state.maker.activeSlot) node.classList.add("is-active");
+    node.appendChild(el("span", "slot-tag", slotLabel(draft, index)));
+    const face = el("div", "slot-face", slot.type === "text" ? (slot.default || "文字") : FIT_LABEL[slot.fit] || slot.fit);
+    node.appendChild(face);
+    const handle = el("span", "slot-handle");
+    handle.addEventListener("pointerdown", (event) => beginDrag(event, index, "resize"));
+    node.appendChild(handle);
+    node.addEventListener("pointerdown", (event) => beginDrag(event, index, "move"));
+    canvas.appendChild(node);
+  });
+}
+
+function beginDrag(event, index, mode) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const draft = state.maker.draft;
+  if (!draft) return;
+  setActiveSlot(index);
+  const slot = draft.slots[index];
+  const scale = state.maker.scale || 1;
+  const origin = { x: event.clientX, y: event.clientY, sx: slot.x, sy: slot.y, sw: slot.width, sh: slot.height };
+  const stepX = Math.max(1, Math.round(draft.width * 0.08));
+  const stepY = Math.max(1, Math.round(draft.height * 0.08));
+  const node = event.currentTarget.closest(".slot") || event.currentTarget;
+  node.classList.add("is-drag");
+
+  const move = (moveEvent) => {
+    const dx = (moveEvent.clientX - origin.x) / scale;
+    const dy = (moveEvent.clientY - origin.y) / scale;
+    if (mode === "move") {
+      let nx = Math.round(origin.sx + dx);
+      let ny = Math.round(origin.sy + dy);
+      if (state.maker.grid && !moveEvent.altKey) {
+        nx = Math.round(nx / stepX) * stepX;
+        ny = Math.round(ny / stepY) * stepY;
+      }
+      slot.x = clamp(nx, -draft.width, draft.width, 0);
+      slot.y = clamp(ny, -draft.height, draft.height, 0);
+    } else {
+      let nw = Math.round(origin.sw + dx);
+      let nh = Math.round(origin.sh + dy);
+      if (state.maker.grid && !moveEvent.altKey) {
+        nw = Math.round(nw / stepX) * stepX;
+        nh = Math.round(nh / stepY) * stepY;
+      }
+      slot.width = clamp(nw, 16, 2048, 16);
+      slot.height = clamp(nh, 16, 2048, 16);
+    }
+    renderStage();
+    renderSlotForm();
+  };
+  const finish = () => {
+    window.removeEventListener("pointermove", move);
+    markDirty();
+    renderStage();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", finish, { once: true });
+  window.addEventListener("pointercancel", finish, { once: true });
+}
+
+function setActiveSlot(index) {
+  state.maker.activeSlot = index;
+  renderStage();
+  renderLayers();
+  renderSlotForm();
+}
+
+function renderLayers() {
+  const list = clear($("mk-layers"));
+  const draft = state.maker.draft;
+  if (!draft || !draft.slots.length) {
+    list.appendChild(el("li", "empty is-inline", "还没有图层"));
+    return;
+  }
+  draft.slots.forEach((slot, index) => {
+    const li = el("li");
+    const item = el("button", "layer-item");
+    item.type = "button";
+    item.style.setProperty("--slot-color", SLOT_COLOR[slot.type] || "#38bdf8");
+    if (index === state.maker.activeSlot) item.classList.add("is-active");
+    item.appendChild(el("i", "layer-dot"));
+    item.appendChild(el("span", "layer-name", slotLabel(draft, index) + (slot.type === "text" && slot.default ? "：" + slot.default : "")));
+    const kill = el("span", "layer-kill");
+    kill.appendChild(icon("i-trash"));
+    kill.addEventListener("click", (event) => {
+      event.stopPropagation();
+      removeSlot(index);
+    });
+    item.appendChild(kill);
+    item.addEventListener("click", () => setActiveSlot(index));
+    li.appendChild(item);
+    list.appendChild(li);
+  });
+}
+
+function removeSlot(index) {
+  const draft = state.maker.draft;
+  if (!draft) return;
+  draft.slots.splice(index, 1);
+  state.maker.activeSlot = Math.min(index, draft.slots.length - 1);
+  markDirty();
+  renderStage();
+  renderLayers();
+  renderSlotForm();
+}
+
+function addSlot(type) {
+  const draft = state.maker.draft;
+  if (!draft) {
+    toast("先新建或选择一个模板", "error");
+    return;
+  }
+  const limits = state.maker.limits || {};
+  const counted = draft.slots.filter((slot) => slot.type === type).length;
+  const cap = type === "image" ? limits.image_slots || 4 : limits.text_slots || 8;
+  if (counted >= cap) {
+    toast((type === "image" ? "图片" : "文字") + "图层最多 " + cap + " 个", "error");
+    return;
+  }
+  if (draft.slots.length >= (limits.slots || 16)) {
+    toast("图层总数已达上限", "error");
+    return;
+  }
+  if (type === "image") {
+    draft.slots.push({
+      type: "image",
+      x: Math.round(draft.width * 0.12),
+      y: Math.round(draft.height * 0.12),
+      width: Math.round(draft.width * 0.5),
+      height: Math.round(draft.height * 0.5),
+      fit: "cover",
+      radius: 0,
+      circle: false,
+      rotate: 0,
+      opacity: 1,
+      flip: false,
+      grayscale: false,
+      behind_base: false,
+    });
+  } else {
+    draft.slots.push({
+      type: "text",
+      x: Math.round(draft.width * 0.06),
+      y: Math.round(draft.height * 0.72),
+      width: Math.round(draft.width * 0.88),
+      height: Math.round(draft.height * 0.2),
+      default: "",
+      color: "#ffffff",
+      stroke_color: "#000000",
+      stroke_width: Math.max(2, Math.round(draft.width / 220)),
+      font_size: 0,
+      min_font_size: 14,
+      bold: true,
+      align: "center",
+      valign: "middle",
+      rotate: 0,
+      line_spacing: 1.18,
+      max_lines: 3,
+      uppercase: false,
+    });
+  }
+  state.maker.activeSlot = draft.slots.length - 1;
+  markDirty();
+  renderStage();
+  renderLayers();
+  renderSlotForm();
+}
+
+
+function ctlNumber(value, min, max, step, onInput) {
+  const input = el("input", "mono");
+  input.type = "number";
+  input.min = String(min);
+  input.max = String(max);
+  input.step = String(step || 1);
+  input.value = String(value);
+  input.addEventListener("input", () => onInput(clamp(input.value, min, max, min)));
+  return input;
+}
+
+function ctlText(value, placeholder, onInput) {
+  const input = el("input");
+  input.type = "text";
+  if (placeholder) input.placeholder = placeholder;
+  input.value = value || "";
+  input.addEventListener("input", () => onInput(input.value));
+  return input;
+}
+
+function ctlSelect(options, value, onInput, labels) {
+  const select = el("select");
+  for (const option of options) {
+    const node = el("option", null, (labels && labels[option]) || option);
+    node.value = option;
+    select.appendChild(node);
+  }
+  select.value = value;
+  select.addEventListener("change", () => onInput(select.value));
+  return select;
+}
+
+function ctlColor(value, onInput) {
+  const wrap = el("span", "color-input");
+  const picker = el("input");
+  picker.type = "color";
+  picker.value = /^#[0-9a-fA-F]{6}$/.test(value || "") ? value : "#000000";
+  const text = el("input", "mono");
+  text.type = "text";
+  text.spellcheck = false;
+  text.value = value || "";
+  picker.addEventListener("input", () => {
+    text.value = picker.value;
+    onInput(picker.value);
+  });
+  text.addEventListener("input", () => {
+    if (/^#[0-9a-fA-F]{6}$/.test(text.value)) picker.value = text.value;
+    onInput(text.value);
+  });
+  wrap.appendChild(picker);
+  wrap.appendChild(text);
   return wrap;
 }
 
-function renderSessionOptions() {
-  const items = state.history.conversations || [];
-  clear(dom.sessionFilter);
-  const all = make("option", "", "全部会话");
-  all.value = "";
-  dom.sessionFilter.append(all);
-  for (const item of items) {
-    const option = make("option", "", shortSession(item.session) + "（" + (item.platform || "--") + "）");
-    option.value = item.session;
-    dom.sessionFilter.append(option);
-  }
-  const known = items.some((item) => item.session === state.session);
-  dom.sessionFilter.value = known ? state.session : "";
-  if (!known) {
-    state.session = "";
+function makerRow(label, control, wide) {
+  const wrap = el("label", "form-row" + (wide ? " is-wide" : ""));
+  wrap.appendChild(el("span", null, label));
+  wrap.appendChild(control);
+  return wrap;
+}
+
+function makerPair(label, first, second, separator) {
+  const wrap = el("div", "form-row");
+  wrap.appendChild(el("span", null, label));
+  const split = el("div", "split");
+  split.appendChild(first);
+  split.appendChild(el("em", null, separator || "×"));
+  split.appendChild(second);
+  wrap.appendChild(split);
+  return wrap;
+}
+
+function makerCheck(label, value, onInput) {
+  const wrap = el("label", "check-row");
+  const box = el("input");
+  box.type = "checkbox";
+  box.checked = Boolean(value);
+  box.addEventListener("change", () => onInput(box.checked));
+  wrap.appendChild(box);
+  wrap.appendChild(el("span", null, label));
+  return wrap;
+}
+
+function renderSlotForm() {
+  const form = clear($("mk-slot-form"));
+  const draft = state.maker.draft;
+  const index = state.maker.activeSlot;
+  if (!draft || index < 0 || !draft.slots[index]) return;
+  const slot = draft.slots[index];
+  const limits = state.maker.limits || {};
+  const touch = () => {
+    markDirty();
+    renderStage();
+  };
+  const set = (prop) => (value) => {
+    slot[prop] = value;
+    touch();
+  };
+
+  form.appendChild(el("p", "eyebrow mono", (slot.type === "image" ? "IMAGE LAYER · " : "TEXT LAYER · ") + slotLabel(draft, index)));
+  form.appendChild(makerPair("位置",
+    ctlNumber(slot.x, -draft.width, draft.width, 1, set("x")),
+    ctlNumber(slot.y, -draft.height, draft.height, 1, set("y")), ","));
+  form.appendChild(makerPair("尺寸",
+    ctlNumber(slot.width, 16, 2048, 1, set("width")),
+    ctlNumber(slot.height, 16, 2048, 1, set("height"))));
+
+  if (slot.type === "image") {
+    form.appendChild(makerRow("填充", ctlSelect(limits.fit_modes || ["cover", "contain", "stretch"], slot.fit || "cover", set("fit"), FIT_LABEL)));
+    form.appendChild(makerPair("圆角/旋转",
+      ctlNumber(slot.radius || 0, 0, 512, 1, set("radius")),
+      ctlNumber(slot.rotate || 0, -180, 180, 1, set("rotate")), "/"));
+    form.appendChild(makerRow("透明度", ctlNumber(slot.opacity === undefined ? 1 : slot.opacity, 0.05, 1, 0.05, set("opacity"))));
+    const flags = el("div", "form-row is-wide");
+    flags.appendChild(makerCheck("圆形裁切", slot.circle, set("circle")));
+    flags.appendChild(makerCheck("左右镜像", slot.flip, set("flip")));
+    flags.appendChild(makerCheck("黑白", slot.grayscale, set("grayscale")));
+    flags.appendChild(makerCheck("垫在底图下", slot.behind_base, set("behind_base")));
+    form.appendChild(flags);
+  } else {
+    form.appendChild(makerRow("默认文字", ctlText(slot.default, "留空则必须由用户输入", set("default"))));
+    form.appendChild(makerRow("文字色", ctlColor(slot.color || "#ffffff", set("color"))));
+    form.appendChild(makerRow("描边色", ctlColor(slot.stroke_color || "#000000", set("stroke_color"))));
+    form.appendChild(makerPair("描边/旋转",
+      ctlNumber(slot.stroke_width || 0, 0, 16, 1, set("stroke_width")),
+      ctlNumber(slot.rotate || 0, -180, 180, 1, set("rotate")), "/"));
+    form.appendChild(makerPair("字号/最小",
+      ctlNumber(slot.font_size || 0, 0, 400, 1, set("font_size")),
+      ctlNumber(slot.min_font_size || 12, 8, 200, 1, set("min_font_size")), "/"));
+    form.appendChild(makerRow("水平", ctlSelect(limits.alignments || ["left", "center", "right"], slot.align || "center", set("align"), ALIGN_LABEL)));
+    form.appendChild(makerRow("垂直", ctlSelect(limits.vertical_alignments || ["top", "middle", "bottom"], slot.valign || "middle", set("valign"), VALIGN_LABEL)));
+    form.appendChild(makerPair("行距/行数",
+      ctlNumber(slot.line_spacing || 1.18, 0.8, 2.5, 0.02, set("line_spacing")),
+      ctlNumber(slot.max_lines || 4, 1, 12, 1, set("max_lines")), "/"));
+    const flags = el("div", "form-row is-wide");
+    flags.appendChild(makerCheck("加粗", slot.bold, set("bold")));
+    flags.appendChild(makerCheck("全部大写", slot.uppercase, set("uppercase")));
+    form.appendChild(flags);
+    form.appendChild(el("p", "opt-desc", "字号填 0 表示自动缩放到刚好放进框内。"));
   }
 }
 
-/* --- 数据加载 ------------------------------------------------------------ */
-
-async function loadOverview() {
-  const requestId = ++state.requests.overview;
-  try {
-    const data = await apiGet("dashboard/overview");
-    if (requestId !== state.requests.overview) {
-      return;
-    }
-    state.overview = data;
-    renderOverview();
-    setStatus("运行中 · " + formatNumber(data.enabled_memes) + " 个可用", "ok");
-  } catch (error) {
-    if (requestId !== state.requests.overview) {
-      return;
-    }
-    setStatus(error.message || "读取概览失败", "error");
-    renderOverview();
-    throw error;
+function paintAssetThumb(node, src, fallbackIcon) {
+  clear(node);
+  if (src) {
+    const image = el("img");
+    image.src = src;
+    image.alt = "";
+    node.appendChild(image);
+    node.style.cursor = "zoom-in";
+    node.onclick = () => openLightbox(src, "素材预览");
+  } else {
+    node.appendChild(icon(fallbackIcon));
+    node.style.cursor = "default";
+    node.onclick = null;
   }
 }
 
-async function loadCatalog({ resetOffset = false } = {}) {
-  if (resetOffset) {
-    state.catalog.offset = 0;
+function renderInspector() {
+  const draft = state.maker.draft;
+  const disabled = !draft;
+  for (const id of ["mk-key", "mk-keywords", "mk-title", "mk-width", "mk-height", "mk-bg", "mk-bg-text"]) {
+    $(id).disabled = disabled;
   }
-  const requestId = ++state.requests.catalog;
-  setMessage(dom.catalogMessage, "正在读取表情库...");
-  if (!state.catalog.items.length) {
-    clear(dom.memeGrid);
-    dom.memeGrid.append(skeleton(8));
-  }
-  try {
-    const data = await apiGet("dashboard/memes", {
-      q: state.filters.q,
-      tag: state.filters.tag,
-      status: state.filters.status,
-      source: state.filters.source,
-      sort: state.filters.sort,
-      offset: state.catalog.offset,
-      limit: PAGE_SIZE,
-    });
-    if (requestId !== state.requests.catalog) {
-      return;
-    }
-    state.catalog = {
-      items: data.items || [],
-      total: Number(data.total) || 0,
-      tags: data.tags || [],
-      sources: data.sources || [],
-      offset: Number(data.offset) || 0,
-      limit: Number(data.limit) || PAGE_SIZE,
-    };
-    if (!state.catalog.items.length && state.catalog.offset > 0 && state.catalog.total > 0) {
-      state.catalog.offset = 0;
-      await loadCatalog();
-      return;
-    }
-    state.filters.sort = data.sort || state.filters.sort;
-    dom.sortFilter.value = state.filters.sort;
-    renderTagOptions();
-    renderSourceChips();
-    setMessage(dom.catalogMessage);
-    renderCatalog();
-  } catch (error) {
-    if (requestId !== state.requests.catalog) {
-      return;
-    }
-    state.catalog.items = [];
-    renderCatalog();
-    setMessage(dom.catalogMessage, error.message || "读取表情库失败。", true);
-  }
-}
-
-async function loadHistory() {
-  const requestId = ++state.requests.history;
-  setMessage(dom.historyMessage, "正在读取使用记录...");
-  try {
-    const data = await apiGet("dashboard/history", { session: state.session, limit: HISTORY_LIMIT });
-    if (requestId !== state.requests.history) {
-      return;
-    }
-    state.history = { items: data.items || [], conversations: data.conversations || [] };
-    renderSessionOptions();
-    renderSessions();
-    renderHistory();
-    setMessage(dom.historyMessage);
-  } catch (error) {
-    if (requestId !== state.requests.history) {
-      return;
-    }
-    state.history = { items: [], conversations: [] };
-    renderSessions();
-    renderHistory();
-    setMessage(dom.historyMessage, error.message || "读取使用记录失败。", true);
-  }
-}
-
-async function setEnabled(key, enabled, control) {
-  if (control) {
-    control.disabled = true;
-  }
-  try {
-    const data = await apiPost("dashboard/meme-enabled", { key, enabled });
-    applyItemUpdate(data.item);
-    toast(data.item.key + " 已" + (enabled ? "启用" : "禁用") + "。");
-    void loadOverview().catch(() => {});
-  } catch (error) {
-    toast(error.message || "保存状态失败。", "error");
-  } finally {
-    if (control) {
-      control.disabled = false;
-    }
-  }
-}
-
-function applyItemUpdate(item) {
-  for (const existing of state.catalog.items) {
-    if (existing.key === item.key) {
-      Object.assign(existing, item);
-    }
-  }
-  if (state.detail?.key === item.key) {
-    Object.assign(state.detail, item);
-    renderDetail(state.detail);
-  }
-  renderCatalog();
-}
-
-async function bulkSetEnabled(enabled) {
-  const keys = [...state.selection];
-  if (!keys.length) {
+  $("mk-save").disabled = disabled || state.maker.busy;
+  $("mk-delete").disabled = !state.maker.savedKey || state.maker.busy;
+  $("maker-preview").disabled = disabled || state.maker.busy;
+  if (!draft) {
+    $("mk-key").value = "";
+    $("mk-keywords").value = "";
+    $("mk-title").value = "";
+    $("mk-width").value = "";
+    $("mk-height").value = "";
+    $("mk-bg-text").value = "";
+    paintAssetThumb($("mk-base-thumb"), null, "i-image");
+    paintAssetThumb($("mk-overlay-thumb"), null, "i-layers");
     return;
   }
-  state.bulkBusy = true;
-  renderBulkBar();
+  $("mk-key").value = draft.key || "";
+  $("mk-keywords").value = (draft.keywords || []).join(" ");
+  $("mk-title").value = draft.title || "";
+  $("mk-width").value = String(draft.width);
+  $("mk-height").value = String(draft.height);
+  $("mk-bg-text").value = draft.background || "#000000";
+  if (/^#[0-9a-fA-F]{6}$/.test(draft.background || "")) $("mk-bg").value = draft.background;
+  const baseSrc = state.maker.baseUpload || (state.maker.removeBase ? null : state.maker.baseUrl);
+  const overlaySrc = state.maker.overlayUpload || (state.maker.removeOverlay ? null : state.maker.overlayUrl);
+  paintAssetThumb($("mk-base-thumb"), baseSrc, "i-image");
+  paintAssetThumb($("mk-overlay-thumb"), overlaySrc, "i-layers");
+}
+
+function renderMaker() {
+  const on = state.maker.enabled;
+  $("maker-root").hidden = !on;
+  $("maker-off").hidden = on;
+  if (!on) {
+    updateStatusLine();
+    return;
+  }
+  renderMakerList();
+  renderInspector();
+  renderStage();
+  renderLayers();
+  renderSlotForm();
+  $("stage-grid").classList.toggle("is-on", state.maker.grid);
+  updateStatusLine();
+}
+
+async function loadMakerTemplates() {
+  if (!state.maker.enabled) {
+    state.maker.templates = [];
+    renderMaker();
+    return;
+  }
   try {
-    const data = await apiPost("dashboard/memes-enabled", { keys, enabled });
-    for (const item of data.items || []) {
-      for (const existing of state.catalog.items) {
-        if (existing.key === item.key) {
-          Object.assign(existing, item);
-        }
-      }
-    }
-    const missing = (data.missing || []).length;
-    toast(
-      formatNumber((data.items || []).length) + " 个表情已" + (enabled ? "启用" : "禁用") + (missing ? "，" + missing + " 个未找到" : "") + "。",
-      missing ? "error" : "ok",
-    );
-    state.selection.clear();
-    renderCatalog();
-    if (state.filters.status !== "all") {
-      await loadCatalog();
-    }
-    void loadOverview().catch(() => {});
+    const payload = await apiGet("dashboard/maker/templates");
+    state.maker.templates = payload.items || [];
+    if (payload.limits) state.maker.limits = payload.limits;
+    renderMaker();
   } catch (error) {
-    toast(error.message || "批量保存失败。", "error");
-  } finally {
-    state.bulkBusy = false;
-    renderBulkBar();
+    state.maker.templates = [];
+    renderMaker();
+    reportError(error, "自制模板");
   }
 }
 
-async function refreshAll() {
-  dom.refresh.disabled = true;
-  dom.refresh.classList.add("is-spinning");
+async function openTemplate(key) {
+  const payload = await apiGet("dashboard/maker/template", { key });
+  const item = payload.item || {};
+  if (payload.limits) state.maker.limits = payload.limits;
+  resetMakerAssets();
+  state.maker.baseUrl = item.base_data_url || null;
+  state.maker.overlayUrl = item.overlay_data_url || null;
+  setDraft({
+    key: item.key,
+    title: item.title || "",
+    keywords: item.keywords || [],
+    width: item.width,
+    height: item.height,
+    background: item.background || "#000000",
+    base: item.base || null,
+    overlay: item.overlay || null,
+    tags: item.tags || [],
+    author: item.author || "",
+    slots: (item.slots || []).map((slot) => Object.assign({}, slot)),
+  }, item.key);
+}
+
+function makerBody() {
+  const draft = state.maker.draft;
+  const body = { template: Object.assign({}, draft) };
+  if (state.maker.baseUpload) body.base_image = state.maker.baseUpload;
+  if (state.maker.overlayUpload) body.overlay_image = state.maker.overlayUpload;
+  if (state.maker.removeBase) body.remove_base = true;
+  if (state.maker.removeOverlay) body.remove_overlay = true;
+  return body;
+}
+
+async function runMakerPreview() {
+  const draft = state.maker.draft;
+  if (!draft) return;
+  state.maker.busy = true;
+  renderInspector();
+  const button = $("maker-preview");
+  button.disabled = true;
   try {
-    const results = await Promise.allSettled([loadOverview(), loadCatalog(), loadHistory()]);
-    const failed = results.find((result) => result.status === "rejected");
-    if (failed) {
-      throw failed.reason;
-    }
-    if (state.detailKey) {
-      await openDetail(state.detailKey);
-    }
+    const payload = await apiPost("dashboard/maker/preview", makerBody());
+    $("preview-image").src = payload.data_url;
+    $("stage-preview").hidden = false;
+    toast("预览已更新", "ok");
   } catch (error) {
-    setStatus(error?.message || "刷新失败", "error");
+    reportError(error, "预览失败");
   } finally {
-    dom.refresh.disabled = false;
-    dom.refresh.classList.remove("is-spinning");
+    state.maker.busy = false;
+    renderInspector();
   }
 }
 
-/* --- 事件绑定 ------------------------------------------------------------ */
+async function saveDraft() {
+  const draft = state.maker.draft;
+  if (!draft) return;
+  state.maker.busy = true;
+  renderInspector();
+  try {
+    const payload = await apiPost("dashboard/maker/save", makerBody());
+    const item = payload.item || {};
+    toast("已保存并加载「" + (item.title || item.key) + "」", "ok");
+    resetMakerAssets();
+    await loadMakerTemplates();
+    await openTemplate(item.key);
+    previewCache.clear();
+    await loadOverview();
+    if (state.tab === "library") await loadLibrary(false);
+  } catch (error) {
+    reportError(error, "保存失败");
+  } finally {
+    state.maker.busy = false;
+    renderInspector();
+  }
+}
 
-function bindEvents() {
-  for (const item of dom.navItems) {
-    item.addEventListener("click", () => {
-      setView(item.dataset.viewTarget);
-      if (item.dataset.viewTarget === "records" && !state.history.items.length) {
-        void loadHistory();
-      }
+async function deleteDraft() {
+  const key = state.maker.savedKey;
+  if (!key) return;
+  if (!(await askConfirm("确定删除模板「" + key + "」？该操作不可撤销。", { confirmText: "删除", danger: true }))) return;
+  state.maker.busy = true;
+  renderInspector();
+  try {
+    await apiPost("dashboard/maker/delete", { key });
+    toast("已删除 " + key, "ok");
+    resetMakerAssets();
+    state.maker.draft = null;
+    state.maker.savedKey = null;
+    state.maker.dirty = false;
+    await loadMakerTemplates();
+    previewCache.clear();
+    await loadOverview();
+  } catch (error) {
+    reportError(error, "删除失败");
+  } finally {
+    state.maker.busy = false;
+    renderInspector();
+  }
+}
+
+async function scaffoldDraft() {
+  const key = uniqueKey("caption");
+  try {
+    const payload = await apiGet("dashboard/maker/scaffold", {
+      key,
+      keywords: key,
+      width: 640,
+      height: 640,
+      title: "底部字幕",
+      image_slot: "1",
+    });
+    resetMakerAssets();
+    setDraft(payload.draft, null);
+    toast("已生成字幕模板草稿，记得改成自己的触发词", "ok");
+  } catch (error) {
+    reportError(error, "生成草稿");
+  }
+}
+
+async function pickAsset(input, which) {
+  const file = input.files && input.files[0];
+  input.value = "";
+  if (!file) return;
+  const limitMb = (state.maker.limits && state.maker.limits.asset_mb) || 8;
+  if (file.size > limitMb * 1024 * 1024) {
+    toast("单张素材不能超过 " + limitMb + "MB", "error");
+    return;
+  }
+  try {
+    const dataUrl = await readFileAsDataUrl(file);
+    if (which === "base") {
+      state.maker.baseUpload = dataUrl;
+      state.maker.removeBase = false;
+    } else {
+      state.maker.overlayUpload = dataUrl;
+      state.maker.removeOverlay = false;
+    }
+    markDirty();
+    renderInspector();
+    renderStage();
+  } catch (error) {
+    reportError(error, "读取图片");
+  }
+}
+
+function clearAsset(which) {
+  if (which === "base") {
+    state.maker.baseUpload = null;
+    state.maker.removeBase = true;
+  } else {
+    state.maker.overlayUpload = null;
+    state.maker.removeOverlay = true;
+  }
+  markDirty();
+  renderInspector();
+  renderStage();
+}
+
+
+/* ---------- 记录 ---------- */
+
+function recordRow(item) {
+  const tr = el("tr");
+  tr.appendChild(el("td", "mono", formatTime(item.created_at)));
+
+  const keyCell = el("td");
+  const keyLink = el("button", "keylink mono");
+  keyLink.type = "button";
+  keyLink.textContent = item.key;
+  keyLink.title = "查看「" + item.key + "」详情";
+  keyLink.addEventListener("click", () => {
+    openMeme(item.key).catch((error) => reportError(error, "表情详情"));
+  });
+  keyCell.appendChild(keyLink);
+  if (item.trigger && item.trigger !== item.key) {
+    keyCell.appendChild(el("small", "cell-sub", "触发词 " + item.trigger));
+  }
+  tr.appendChild(keyCell);
+
+  const sessionCell = el("td", "mono");
+  sessionCell.textContent = shortSession(item.session);
+  sessionCell.title = String(item.session || "");
+  if (item.platform) sessionCell.appendChild(el("small", "cell-sub", item.platform));
+  tr.appendChild(sessionCell);
+
+  tr.appendChild(el("td", null, item.sender_name || item.sender_id || "匿名"));
+  return tr;
+}
+
+function renderRecords() {
+  const rec = state.records;
+  const body = clear($("rec-body"));
+  for (const item of rec.items) body.appendChild(recordRow(item));
+
+  const hasItems = rec.items.length > 0;
+  $("rec-empty").hidden = hasItems;
+  $("rec-table").hidden = !hasItems;
+  $("rec-meta").textContent = hasItems
+    ? rec.items.length + " 条" + (rec.session ? " · 已按会话筛选" : " · 全部会话")
+    : "暂无记录";
+
+  const counts = new Map();
+  for (const item of rec.items) counts.set(item.key, (counts.get(item.key) || 0) + 1);
+  const ranking = Array.from(counts, ([key, count]) => ({ key, count }))
+    .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))
+    .slice(0, 8);
+  renderBars($("rec-top"), ranking, "本页还没有记录");
+
+  const picker = $("rec-session");
+  fillSelect(picker, rec.conversations.map((item) => item.session), "全部会话", shortSession);
+  picker.value = rec.session || "";
+  renderSessionList($("rec-convs"), rec.conversations, (session) => {
+    state.records.session = session === state.records.session ? "" : session;
+    loadRecords().catch((error) => reportError(error, "记录"));
+  });
+}
+
+async function loadRecords() {
+  const rec = state.records;
+  try {
+    const payload = await apiGet("dashboard/history", { session: rec.session, limit: rec.limit });
+    rec.items = payload.items || [];
+    rec.conversations = payload.conversations || [];
+    renderRecords();
+  } catch (error) {
+    reportError(error, "记录");
+  }
+}
+
+/* ---------- 标签页 ---------- */
+
+const tabLoaded = { overview: false, library: false, maker: false, records: false };
+
+function moveInk() {
+  const ink = $("tab-ink");
+  const active = document.querySelector(".tab.is-active");
+  if (!ink || !active) return;
+  ink.style.width = active.offsetWidth + "px";
+  ink.style.transform = "translateX(" + active.offsetLeft + "px)";
+}
+
+function ensureTabData(name) {
+  if (tabLoaded[name]) return;
+  tabLoaded[name] = true;
+  let job = null;
+  if (name === "library") job = loadLibrary(true);
+  else if (name === "maker") job = loadMakerTemplates();
+  else if (name === "records") job = loadRecords();
+  if (job) {
+    job.catch((error) => {
+      tabLoaded[name] = false;
+      reportError(error, "加载");
     });
   }
-  window.addEventListener("hashchange", () => setView(viewFromHash(), { syncHash: false }));
+}
 
-  for (const button of dom.themeButtons) {
-    button.addEventListener("click", () => applyThemeMode(button.dataset.themeMode));
+function switchTab(name) {
+  const target = TABS.includes(name) ? name : "overview";
+  const changed = state.tab !== target;
+  state.tab = target;
+
+  for (const button of document.querySelectorAll(".tab")) {
+    const on = button.dataset.tab === target;
+    button.classList.toggle("is-active", on);
+    button.setAttribute("aria-selected", on ? "true" : "false");
   }
-  systemDark?.addEventListener?.("change", () => {
-    if (state.themeMode === "system") {
-      applyThemeMode("system", false);
+  for (const panel of document.querySelectorAll(".panel")) {
+    const on = panel.id === "panel-" + target;
+    panel.classList.toggle("is-active", on);
+    panel.hidden = !on;
+  }
+
+  moveInk();
+  if (window.location.hash.slice(1) !== target) {
+    try {
+      window.history.replaceState(null, "", "#" + target);
+    } catch (error) {
+      window.location.hash = target;
+    }
+  }
+  if (changed) window.scrollTo(0, 0);
+  ensureTabData(target);
+  if (target === "maker") renderStage();
+  updateStatusLine();
+  updateSpy();
+}
+
+/* ---------- 主题与密度 ---------- */
+
+function applyTheme(name) {
+  const theme = THEMES.includes(name) ? name : THEMES[0];
+  document.documentElement.dataset.theme = theme;
+  document.body.dataset.theme = theme;
+  $("theme-select").value = theme;
+  const accent = window.getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+  if (accent) $("theme-swatch").style.background = accent;
+  try {
+    window.localStorage.setItem(THEME_KEY, theme);
+  } catch (error) {
+    /* 隐私模式下忽略 */
+  }
+  window.requestAnimationFrame(moveInk);
+}
+
+function applyDensity(mode) {
+  const density = mode === "compact" ? "compact" : "cozy";
+  document.documentElement.dataset.density = density;
+  document.body.dataset.density = density;
+  $("density-label").textContent = density === "compact" ? "紧凑" : "宽松";
+  $("density-toggle").classList.toggle("is-on", density === "compact");
+  try {
+    window.localStorage.setItem(DENSITY_KEY, density);
+  } catch (error) {
+    /* 隐私模式下忽略 */
+  }
+  window.requestAnimationFrame(() => {
+    moveInk();
+    if (state.tab === "maker") renderStage();
+  });
+}
+
+function readPref(key, fallback) {
+  try {
+    const value = window.localStorage.getItem(key);
+    return value === null ? fallback : value;
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function writePref(key, value) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch (error) {
+    /* 忽略 */
+  }
+}
+
+/* ---------- 滚动进度 ---------- */
+
+const SPY_SEGMENTS = 14;
+
+function buildSpy() {
+  const spy = clear($("status-spy"));
+  for (let index = 0; index < SPY_SEGMENTS; index += 1) spy.appendChild(el("i"));
+}
+
+function updateSpy() {
+  const spy = $("status-spy");
+  const cells = spy.children;
+  if (!cells.length) return;
+  const doc = document.documentElement;
+  const scrollable = doc.scrollHeight - window.innerHeight;
+  let lit = cells.length;
+  if (scrollable > 8) {
+    const ratio = Math.min(1, Math.max(0, window.scrollY / scrollable));
+    lit = Math.max(1, Math.round(ratio * cells.length));
+  }
+  for (let index = 0; index < cells.length; index += 1) {
+    cells[index].classList.toggle("is-on", index < lit);
+  }
+}
+
+/* ---------- 事件绑定 ---------- */
+
+function bindShell() {
+  for (const button of document.querySelectorAll(".tab")) {
+    button.addEventListener("click", () => switchTab(button.dataset.tab));
+  }
+  for (const button of document.querySelectorAll("[data-goto]")) {
+    button.addEventListener("click", () => switchTab(button.dataset.goto));
+  }
+  $("theme-select").addEventListener("change", (event) => applyTheme(event.target.value));
+  $("density-toggle").addEventListener("click", () => {
+    applyDensity(document.documentElement.dataset.density === "compact" ? "cozy" : "compact");
+  });
+  $("refresh-all").addEventListener("click", async () => {
+    const button = $("refresh-all");
+    button.disabled = true;
+    previewCache.clear();
+    materialCache.clear();
+    try {
+      await loadOverview();
+      if (tabLoaded.library) await loadLibrary(false);
+      if (tabLoaded.maker) await loadMakerTemplates();
+      if (tabLoaded.records) await loadRecords();
+      toast("数据已刷新", "ok");
+    } catch (error) {
+      reportError(error, "刷新失败");
+    } finally {
+      button.disabled = false;
     }
   });
 
-  dom.refresh.addEventListener("click", () => void refreshAll());
+  window.addEventListener("hashchange", () => switchTab(window.location.hash.slice(1)));
+  window.addEventListener("scroll", updateSpy, { passive: true });
+  const onResize = debounce(() => {
+    moveInk();
+    updateSpy();
+    if (state.tab === "maker") renderStage();
+  }, 140);
+  window.addEventListener("resize", onResize);
+  window.addEventListener("beforeunload", (event) => {
+    if (!state.maker.dirty) return undefined;
+    event.preventDefault();
+    event.returnValue = "";
+    return "";
+  });
+}
 
-  let searchTimer = 0;
-  dom.search.addEventListener("input", () => {
-    window.clearTimeout(searchTimer);
-    searchTimer = window.setTimeout(() => {
-      state.filters.q = dom.search.value.trim();
-      void loadCatalog({ resetOffset: true });
-    }, 220);
+function bindLibrary() {
+  const lib = state.library;
+  const search = $("lib-search");
+  const runSearch = debounce(() => {
+    lib.query = search.value.trim();
+    loadLibrary(true);
+  }, 220);
+  search.addEventListener("input", runSearch);
+  search.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    lib.query = search.value.trim();
+    loadLibrary(true);
   });
-  dom.tagFilter.addEventListener("change", () => {
-    state.filters.tag = dom.tagFilter.value;
-    void loadCatalog({ resetOffset: true });
+  $("lib-search-clear").addEventListener("click", () => {
+    search.value = "";
+    lib.query = "";
+    loadLibrary(true);
+    search.focus();
   });
-  dom.statusFilter.addEventListener("change", () => {
-    state.filters.status = dom.statusFilter.value;
-    void loadCatalog({ resetOffset: true });
-  });
-  dom.sortFilter.addEventListener("change", () => {
-    state.filters.sort = dom.sortFilter.value;
-    void loadCatalog({ resetOffset: true });
-  });
-  for (const button of dom.layoutButtons) {
-    button.addEventListener("click", () => setLayout(button.dataset.layout));
+
+  const selects = [["lib-source", "source"], ["lib-tag", "tag"], ["lib-status", "status"], ["lib-sort", "sort"]];
+  for (const [id, field] of selects) {
+    $(id).addEventListener("change", (event) => {
+      lib[field] = event.target.value;
+      loadLibrary(true);
+    });
   }
-  dom.selectModeButton.addEventListener("click", () => setSelectMode(!state.selectMode));
-  dom.bulkSelectPage.addEventListener("click", togglePageSelection);
-  dom.bulkEnable.addEventListener("click", () => void bulkSetEnabled(true));
-  dom.bulkDisable.addEventListener("click", () => void bulkSetEnabled(false));
-  dom.bulkClear.addEventListener("click", () => {
-    state.selection.clear();
-    renderCatalog();
-  });
-  dom.previousPage.addEventListener("click", () => {
-    state.catalog.offset = Math.max(0, state.catalog.offset - PAGE_SIZE);
-    void loadCatalog();
-  });
-  dom.nextPage.addEventListener("click", () => {
-    state.catalog.offset += PAGE_SIZE;
-    void loadCatalog();
-  });
 
-  dom.sessionFilter.addEventListener("change", () => {
-    state.session = dom.sessionFilter.value;
-    void loadHistory();
-  });
-  dom.clearSessionFilter.addEventListener("click", () => {
-    state.session = "";
-    void loadHistory();
-  });
-  for (const button of dom.recordsModeButtons) {
+  for (const button of document.querySelectorAll(".segmented [data-view]")) {
     button.addEventListener("click", () => {
-      state.recordsMode = button.dataset.recordsMode;
-      for (const other of dom.recordsModeButtons) {
-        other.setAttribute("aria-selected", String(other === button));
+      lib.view = button.dataset.view;
+      writePref(VIEW_KEY, lib.view);
+      for (const sibling of document.querySelectorAll(".segmented [data-view]")) {
+        sibling.classList.toggle("is-active", sibling === button);
       }
-      renderHistory();
+      renderLibraryGrid();
     });
   }
 
-  dom.drawerClose.addEventListener("click", closeDrawer);
-  dom.drawerBackdrop.addEventListener("click", closeDrawer);
-  dom.lightboxClose.addEventListener("click", closeLightbox);
-  dom.lightbox.addEventListener("click", (event) => {
-    if (event.target === dom.lightbox || event.target === dom.lightboxImage.parentElement) {
-      closeLightbox();
-    }
+  $("lib-thumbs").addEventListener("click", () => {
+    lib.thumbs = !lib.thumbs;
+    writePref(THUMB_KEY, lib.thumbs ? "1" : "0");
+    $("lib-thumbs").classList.toggle("is-on", lib.thumbs);
+    renderLibraryGrid();
   });
 
+  $("lib-select").addEventListener("click", () => {
+    lib.selecting = !lib.selecting;
+    if (!lib.selecting) lib.picked.clear();
+    $("lib-select").classList.toggle("is-on", lib.selecting);
+    renderLibraryGrid();
+    renderBulkbar();
+  });
+
+  $("lib-prev").addEventListener("click", () => {
+    lib.offset = Math.max(0, lib.offset - PAGE_SIZE);
+    loadLibrary(false);
+  });
+  $("lib-next").addEventListener("click", () => {
+    if (lib.offset + PAGE_SIZE >= lib.total) return;
+    lib.offset += PAGE_SIZE;
+    loadLibrary(false);
+  });
+
+  const reset = $("lib-reset");
+  if (reset) {
+    reset.addEventListener("click", () => {
+      lib.query = "";
+      lib.tag = "";
+      lib.status = "";
+      lib.source = "";
+      lib.sort = "key";
+      search.value = "";
+      $("lib-tag").value = "";
+      $("lib-status").value = "";
+      $("lib-source").value = "";
+      $("lib-sort").value = "key";
+      loadLibrary(true);
+    });
+  }
+
+  $("bulk-page").addEventListener("click", () => {
+    for (const item of lib.items) {
+      if (lib.picked.size >= BULK_LIMIT) break;
+      lib.picked.add(item.key);
+    }
+    renderLibraryGrid();
+    renderBulkbar();
+  });
+  $("bulk-clear").addEventListener("click", () => {
+    lib.picked.clear();
+    renderLibraryGrid();
+    renderBulkbar();
+  });
+  for (const [id, enabled] of [["bulk-enable", true], ["bulk-disable", false]]) {
+    $(id).addEventListener("click", async () => {
+      const keys = Array.from(lib.picked);
+      if (!keys.length) return;
+      const button = $(id);
+      button.disabled = true;
+      try {
+        const payload = await apiPost("dashboard/memes-enabled", { keys, enabled });
+        const done = (payload.items || []).length;
+        const missing = (payload.missing || []).length;
+        toast((enabled ? "已启用 " : "已禁用 ") + done + " 个表情" + (missing ? "，" + missing + " 个未找到" : ""), "ok");
+        lib.picked.clear();
+        await loadLibrary(false);
+        await loadOverview();
+      } catch (error) {
+        reportError(error, "批量操作失败");
+      } finally {
+        renderBulkbar();
+        button.disabled = false;
+      }
+    });
+  }
+}
+
+let confirmResolve = null;
+
+/* Plugin pages run inside the dashboard iframe, where native modals can be
+   suppressed. Use an in-page dialog so destructive prompts always appear. */
+function closeConfirm(result) {
+  if (!confirmResolve) return;
+  const resolve = confirmResolve;
+  confirmResolve = null;
+  const node = $("confirm");
+  if (node) node.hidden = true;
+  resolve(result);
+}
+
+function askConfirm(message, options) {
+  const opts = options || {};
+  const node = $("confirm");
+  if (!node) return Promise.resolve(true);
+  closeConfirm(false);
+  $("confirm-title").textContent = opts.title || "请确认";
+  $("confirm-text").textContent = message;
+  const ok = $("confirm-ok");
+  ok.querySelector("span").textContent = opts.confirmText || "确定";
+  ok.classList.toggle("is-danger", Boolean(opts.danger));
+  ok.classList.toggle("is-accent", !opts.danger);
+  node.hidden = false;
+  try { ok.focus(); } catch { /* focus is best-effort */ }
+  return new Promise((resolve) => { confirmResolve = resolve; });
+}
+
+function bindOverlays() {
+  $("drawer-close").addEventListener("click", closeDrawer);
+  $("drawer-backdrop").addEventListener("click", closeDrawer);
+  $("lightbox-close").addEventListener("click", closeLightbox);
+  $("lightbox").addEventListener("click", (event) => {
+    if (event.target === $("lightbox")) closeLightbox();
+  });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      if (!dom.lightbox.hidden) {
-        closeLightbox();
-        return;
-      }
-      if (!dom.drawer.hidden) {
-        closeDrawer();
-      }
+    if (event.key !== "Escape") return;
+    if (!$("lightbox").hidden) {
+      closeLightbox();
       return;
     }
-    if (event.key === "/" && !event.ctrlKey && !event.metaKey && !event.altKey) {
-      if (!dom.drawer.hidden || !dom.lightbox.hidden) {
-        return;
-      }
-      const tag = document.activeElement?.tagName;
-      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") {
-        return;
-      }
-      event.preventDefault();
-      setView("library");
-      dom.search.focus();
+    if (!$("confirm").hidden) {
+      closeConfirm(false);
+      return;
     }
+    if (!$("drawer").hidden) closeDrawer();
+  });
+  $("confirm-ok").addEventListener("click", () => closeConfirm(true));
+  $("confirm-cancel").addEventListener("click", () => closeConfirm(false));
+  $("confirm-cancel-bg").addEventListener("click", () => closeConfirm(false));
+}
+
+function bindMaker() {
+  const maker = state.maker;
+
+  $("maker-new").addEventListener("click", async () => {
+    if (maker.dirty && !(await askConfirm("当前草稿尚未保存，确定新建空白模板？", { confirmText: "新建" }))) return;
+    resetMakerAssets();
+    setDraft(blankDraft(), null);
+  });
+  $("maker-scaffold").addEventListener("click", async () => {
+    if (maker.dirty && !(await askConfirm("当前草稿尚未保存，确定生成字幕模板草稿？", { confirmText: "生成" }))) return;
+    scaffoldDraft();
+  });
+  $("maker-reload").addEventListener("click", () => {
+    loadMakerTemplates().catch((error) => reportError(error, "自制模板"));
+  });
+  $("maker-preview").addEventListener("click", () => runMakerPreview());
+  $("preview-close").addEventListener("click", () => {
+    $("stage-preview").hidden = true;
+  });
+  $("stage-grid").addEventListener("click", () => {
+    maker.grid = !maker.grid;
+    $("stage-grid").classList.toggle("is-on", maker.grid);
+    renderStage();
+  });
+
+  const textFields = [["mk-key", (draft, value) => { draft.key = value.trim(); }],
+    ["mk-title", (draft, value) => { draft.title = value; }],
+    ["mk-keywords", (draft, value) => { draft.keywords = value.split(/[\s,，、]+/).filter(Boolean); }]];
+  for (const [id, setter] of textFields) {
+    $(id).addEventListener("input", (event) => {
+      if (!maker.draft) return;
+      setter(maker.draft, event.target.value);
+      markDirty();
+      renderStage();
+    });
+  }
+
+  for (const [id, field] of [["mk-width", "width"], ["mk-height", "height"]]) {
+    $(id).addEventListener("change", (event) => {
+      if (!maker.draft) return;
+      const canvas = (maker.limits && maker.limits.canvas) || { min: 64, max: 2048 };
+      const next = Math.round(clamp(event.target.value, canvas.min, canvas.max, maker.draft[field]));
+      maker.draft[field] = next;
+      event.target.value = String(next);
+      markDirty();
+      renderStage();
+      renderSlotForm();
+    });
+  }
+
+  $("mk-bg").addEventListener("input", (event) => {
+    if (!maker.draft) return;
+    maker.draft.background = event.target.value;
+    $("mk-bg-text").value = event.target.value;
+    markDirty();
+    renderStage();
+  });
+  $("mk-bg-text").addEventListener("change", (event) => {
+    if (!maker.draft) return;
+    const value = event.target.value.trim();
+    if (!/^#[0-9a-fA-F]{6}$/.test(value)) {
+      toast("背景色请填写 #RRGGBB 格式", "error");
+      event.target.value = maker.draft.background || "#000000";
+      return;
+    }
+    maker.draft.background = value;
+    $("mk-bg").value = value;
+    markDirty();
+    renderStage();
+  });
+
+  $("mk-base-file").addEventListener("change", (event) => pickAsset(event.target, "base"));
+  $("mk-overlay-file").addEventListener("change", (event) => pickAsset(event.target, "overlay"));
+  $("mk-base-clear").addEventListener("click", () => clearAsset("base"));
+  $("mk-overlay-clear").addEventListener("click", () => clearAsset("overlay"));
+
+  $("mk-add-image").addEventListener("click", () => addSlot("image"));
+  $("mk-add-text").addEventListener("click", () => addSlot("text"));
+  $("mk-save").addEventListener("click", () => saveDraft());
+  $("mk-delete").addEventListener("click", () => deleteDraft());
+
+  $("maker-canvas").addEventListener("keydown", (event) => {
+    const draft = maker.draft;
+    const index = maker.activeSlot;
+    if (!draft || index < 0 || !draft.slots[index]) return;
+    const slot = draft.slots[index];
+    if (event.key === "Delete" || event.key === "Backspace") {
+      event.preventDefault();
+      removeSlot(index);
+      return;
+    }
+    const step = event.shiftKey ? 10 : 1;
+    const moves = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+    const delta = moves[event.key];
+    if (!delta) return;
+    event.preventDefault();
+    slot.x = Math.round(clamp(slot.x + delta[0], 0, draft.width - slot.width, slot.x));
+    slot.y = Math.round(clamp(slot.y + delta[1], 0, draft.height - slot.height, slot.y));
+    markDirty();
+    renderStage();
+    renderSlotForm();
   });
 }
 
-function setLayout(layout) {
-  state.layout = layout === "list" ? "list" : "grid";
-  for (const button of dom.layoutButtons) {
-    button.setAttribute("aria-selected", String(button.dataset.layout === state.layout));
-  }
-  try {
-    window.localStorage.setItem(LAYOUT_STORAGE_KEY, state.layout);
-  } catch {
-    // 忽略存储不可用。
-  }
-  renderCatalog();
-}
-
-/* --- 启动 ---------------------------------------------------------------- */
-
-function restorePreferences() {
-  let theme = "system";
-  let layout = "grid";
-  try {
-    theme = window.localStorage.getItem(THEME_STORAGE_KEY) || "system";
-    layout = window.localStorage.getItem(LAYOUT_STORAGE_KEY) || "grid";
-  } catch {
-    // 忽略存储不可用。
-  }
-  applyThemeMode(theme, false);
-  setLayout(layout);
-}
+/* ---------- 启动 ---------- */
 
 async function boot() {
-  restorePreferences();
-  bindEvents();
-  setView(viewFromHash(), { syncHash: false });
-  setStatus("正在连接...", "warn");
-  renderOverview();
+  applyTheme(readPref(THEME_KEY, "aurora"));
+  applyDensity(readPref(DENSITY_KEY, "cozy"));
+  buildSpy();
 
-  if (!bridge) {
-    const message = "AstrBot 页面桥接未加载，请在 AstrBot Dashboard 内打开本页面。";
-    setStatus("桥接未加载", "error");
-    setMessage(dom.catalogMessage, message, true);
-    setMessage(dom.historyMessage, message, true);
-    return;
+  const lib = state.library;
+  lib.view = readPref(VIEW_KEY, "grid") === "list" ? "list" : "grid";
+  lib.thumbs = readPref(THUMB_KEY, "0") === "1";
+  for (const button of document.querySelectorAll(".segmented [data-view]")) {
+    button.classList.toggle("is-active", button.dataset.view === lib.view);
   }
-  try {
-    await bridge.ready();
-  } catch (error) {
-    const message = error?.message || "页面初始化失败。";
-    setStatus("初始化失败", "error");
-    setMessage(dom.catalogMessage, message, true);
-    setMessage(dom.historyMessage, message, true);
-    return;
+  $("lib-thumbs").classList.toggle("is-on", lib.thumbs);
+  $("lib-grid").dataset.view = lib.view;
+
+  const limitSelect = $("rec-limit");
+  state.records.limit = clamp(limitSelect.value, 1, 500, HISTORY_LIMIT);
+  limitSelect.addEventListener("change", (event) => {
+    state.records.limit = clamp(event.target.value, 1, 500, HISTORY_LIMIT);
+    loadRecords().catch((error) => reportError(error, "记录"));
+  });
+  $("rec-session").addEventListener("change", (event) => {
+    state.records.session = event.target.value;
+    loadRecords().catch((error) => reportError(error, "记录"));
+  });
+  $("rec-refresh").addEventListener("click", () => {
+    loadRecords().catch((error) => reportError(error, "记录"));
+  });
+
+  bindShell();
+  bindLibrary();
+  bindOverlays();
+  bindMaker();
+  renderBulkbar();
+
+  if (!bridge || typeof bridge.ready !== "function") {
+    throw new Error("未检测到 AstrBot 页面桥接，请在 AstrBot WebUI 中打开本页面。");
   }
-  await refreshAll();
+  await bridge.ready();
+  await loadOverview();
+  switchTab(window.location.hash.slice(1) || "overview");
+  updateSpy();
 }
 
-void boot();
+boot().catch((error) => {
+  reportError(error, "初始化失败");
+  const status = $("status-left");
+  if (status) status.textContent = "初始化失败：" + ((error && error.message) || error);
+});

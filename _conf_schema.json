@@ -216,6 +216,12 @@
     },
     "default": 500
   },
+  "maker_enabled": {
+    "description": "启用自制表情包模板（工作台）",
+    "hint": "开启后会加载插件数据目录 maker/ 下的自制模板，并在 WebUI 中显示“工作台”。关闭后模板文件保留但不注册触发词。",
+    "type": "bool",
+    "default": true
+  },
   "dashboard_preview_max_mb": {
     "description": "WebUI 单张预览和素材大小上限（MB）",
     "hint": "超过此限制的图片不会传送到浏览器。",

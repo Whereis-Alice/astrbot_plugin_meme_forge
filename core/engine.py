@@ -55,6 +55,12 @@ class MemeEngine:
         self._sorted_triggers: list[str] = []
         self._extension_memes: dict[str, list[Any]] = {}
         self._source_by_key: dict[str, str] = {}
+        # Alias and disabled-list caches: chat traffic hits match()/is_disabled()
+        # on every message, and rebuilding both maps for ~1.5k triggers is costly.
+        self._reload_token = 0
+        self._alias_signature: tuple[Any, ...] | None = None
+        self._disabled_signature: tuple[Any, ...] | None = None
+        self._disabled_keys: frozenset[str] = frozenset()
 
     @property
     def version(self) -> str:
@@ -229,6 +235,8 @@ class MemeEngine:
         by_key: dict[str, Any] = {}
         trigger_map: dict[str, Any] = {}
         source_by_key: dict[str, str] = {}
+        duplicate_keys: list[str] = []
+        duplicate_triggers: list[str] = []
         for source, memes in sources:
             for meme in memes:
                 key = str(getattr(meme, "key", "")).strip()
@@ -236,11 +244,7 @@ class MemeEngine:
                     continue
                 existing_key = by_key.get(key)
                 if existing_key is not None:
-                    logger.warning(
-                        "[meme_forge] 扩展 %s 的重复 meme key %s 已跳过，保留现有实现",
-                        source,
-                        key,
-                    )
+                    duplicate_keys.append(f"{key}({source})")
                     continue
                 by_key[key] = meme
                 effective_source = source
@@ -255,10 +259,8 @@ class MemeEngine:
                 for keyword in self.get_keywords(meme):
                     existing = trigger_map.setdefault(keyword, meme)
                     if existing is not meme:
-                        logger.warning(
-                            "[meme_forge] 重复触发词 %s，保留 meme %s",
-                            keyword,
-                            getattr(existing, "key", "unknown"),
+                        duplicate_triggers.append(
+                            f"{keyword}→{getattr(existing, 'key', 'unknown')}"
                         )
 
         for alias, original in self._custom_aliases().items():
@@ -277,12 +279,36 @@ class MemeEngine:
         self._sorted_triggers = sorted(
             trigger_map, key=lambda value: (-len(value), value)
         )
+        self._reload_token += 1
+        self._alias_signature = (
+            self._reload_token,
+            tuple(sorted(self._custom_aliases().items())),
+        )
+        self._disabled_signature = None
+        self._log_duplicates("meme key", duplicate_keys)
+        self._log_duplicates("触发词", duplicate_triggers)
         logger.info(
             "[meme_forge] 已加载 %d 个 meme、%d 个触发词 (meme_generator %s)",
             len(self.memes),
             len(self._trigger_map),
             self.version,
         )
+
+    @staticmethod
+    def _log_duplicates(label: str, entries: list[str]) -> None:
+        """Report collisions once instead of one warning line per entry."""
+        if not entries:
+            return
+        preview = "、".join(entries[:8])
+        if len(entries) > 8:
+            preview += f" 等 {len(entries)} 项"
+        logger.info(
+            "[meme_forge] %d 个%s重复，已保留先加载的实现：%s",
+            len(entries),
+            label,
+            preview,
+        )
+        logger.debug("[meme_forge] 重复%s完整列表：%s", label, "、".join(entries))
 
     def get_source(self, meme: Any) -> str:
         key = str(getattr(meme, "key", ""))
@@ -310,18 +336,25 @@ class MemeEngine:
         return random.choice(candidates) if candidates else None
 
     def _refresh_aliases(self) -> None:
-        # Configuration can be edited in WebUI without reloading the plugin.
+        # Configuration can be edited in WebUI without reloading the plugin,
+        # so re-check the alias config cheaply and only rebuild when it moved.
+        aliases = self._custom_aliases()
+        signature = (self._reload_token, tuple(sorted(aliases.items())))
+        if signature == self._alias_signature and self._sorted_triggers:
+            return
+
         base: dict[str, Any] = {}
         for meme in self.memes:
             base[str(meme.key)] = meme
             for keyword in self.get_keywords(meme):
                 base.setdefault(keyword, meme)
-        for alias, original in self._custom_aliases().items():
+        for alias, original in aliases.items():
             target = base.get(original) or self._by_key.get(original)
             if target is not None:
                 base[alias] = target
         self._trigger_map = base
         self._sorted_triggers = sorted(base, key=lambda value: (-len(value), value))
+        self._alias_signature = signature
 
     def match(self, text: str, *, fuzzy: bool = False) -> MemeMatch | None:
         self._refresh_aliases()
@@ -372,14 +405,32 @@ class MemeEngine:
         meme = self.resolve(name)
         return str(meme.key) if meme is not None else None
 
+    def disabled_keys(self) -> frozenset[str]:
+        """Canonical keys plus raw entries of the configured disable list."""
+        raw = self._config_value("disabled_memes", []) or []
+        entries = tuple(sorted({str(value) for value in raw}))
+        signature = (self._reload_token, entries)
+        if signature == self._disabled_signature:
+            return self._disabled_keys
+
+        resolved: set[str] = set(entries)
+        if entries:
+            self._refresh_aliases()
+            for entry in entries:
+                target = self._by_key.get(entry) or self._trigger_map.get(entry)
+                if target is not None:
+                    resolved.add(str(getattr(target, "key", "")))
+        self._disabled_keys = frozenset(resolved - {""})
+        self._disabled_signature = signature
+        return self._disabled_keys
+
     def is_disabled(self, meme: Any) -> bool:
-        disabled = set(self._config_value("disabled_memes", []) or [])
-        key = str(getattr(meme, "key", ""))
-        if key in disabled:
+        disabled = self.disabled_keys()
+        if not disabled:
+            return False
+        if str(getattr(meme, "key", "")) in disabled:
             return True
-        if any(keyword in disabled for keyword in self.get_keywords(meme)):
-            return True
-        return any(self.resolve(str(value)) is meme for value in disabled)
+        return any(keyword in disabled for keyword in self.get_keywords(meme))
 
     def format_info(self, meme: Any) -> str:
         params = self.get_params(meme)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import mimetypes
+import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
@@ -11,6 +12,27 @@ from .engine import MemeEngine, MemeEngineError
 from .extensions import MemeEmojiExtensionManager
 from .gouqi_extension import GouqiExtensionManager
 from .history import MemeUsageHistory
+from .imaging import ImageRenderError
+from .maker import (
+    ALIGNMENTS,
+    FIT_MODES,
+    MAX_ASSET_BYTES,
+    MAX_CANVAS,
+    MAX_CANVAS_PIXELS,
+    MAX_IMAGE_SLOTS,
+    MAX_KEYWORDS,
+    MAX_SLOTS,
+    MAX_TEMPLATES,
+    MAX_TEXT_SLOTS,
+    MIN_CANVAS,
+    VERTICAL_ALIGNMENTS,
+    MakerError,
+    MakerMeme,
+    MakerStore,
+    MakerTemplate,
+    caption_template_payload,
+    decode_data_url,
+)
 
 
 class DashboardError(RuntimeError):
@@ -37,10 +59,12 @@ class MemeDashboard:
         config: Any,
         *,
         gouqi_extension: GouqiExtensionManager | None = None,
+        maker_store: MakerStore | None = None,
     ) -> None:
         self.engine = engine
         self.extension = extension
         self.gouqi_extension = gouqi_extension
+        self.maker_store = maker_store
         self.config = config
         self._preview_lock = asyncio.Lock()
 
@@ -244,6 +268,7 @@ class MemeDashboard:
                 "assets_valid": bool(getattr(gouqi_status, "assets_valid", False)),
                 "templates": int(getattr(gouqi_status, "templates", 0)),
             },
+            "maker": self.maker_overview(),
         }
 
     def history(
@@ -300,6 +325,15 @@ class MemeDashboard:
         media_type = self._guess_media_type(image)
         return {"media_type": media_type, "data_url": self._data_url(image, media_type)}
 
+    def _custom_material_roots(self) -> list[Path]:
+        """Roots that extension memes may expose their own material folders under."""
+        roots: list[Path] = []
+        if self.gouqi_extension is not None:
+            roots.append(self.gouqi_extension.assets_root.resolve(strict=False))
+        if self.maker_store is not None:
+            roots.append(self.maker_store.root.resolve(strict=False))
+        return roots
+
     @property
     def _material_root(self) -> Path:
         return self.extension.meme_home / "resources" / "images"
@@ -331,10 +365,12 @@ class MemeDashboard:
         custom_directory = getattr(meme, "material_directory", None)
         if custom_directory is not None:
             directory = Path(custom_directory).resolve(strict=False)
-            if self.gouqi_extension is None:
+            allowed = self._custom_material_roots()
+            if not allowed:
                 raise DashboardError("扩展素材目录不可用。")
-            root = self.gouqi_extension.assets_root.resolve(strict=False)
-            if directory != root and root not in directory.parents:
+            if not any(
+                directory == root or root in directory.parents for root in allowed
+            ):
                 raise DashboardError("扩展素材路径无效。")
             return directory
         root = self._material_root.resolve(strict=False)
@@ -385,3 +421,246 @@ class MemeDashboard:
         data = target.read_bytes()
         media_type = mimetypes.guess_type(target.name)[0] or self._guess_media_type(data)
         return {"media_type": media_type, "data_url": self._data_url(data, media_type)}
+
+    # ------------------------------------------------------------------
+    # Meme Maker (user-authored templates)
+    # ------------------------------------------------------------------
+
+    @property
+    def maker_enabled(self) -> bool:
+        if self.maker_store is None:
+            return False
+        return bool(self._config_value("maker_enabled", True))
+
+    def _require_maker(self) -> MakerStore:
+        if self.maker_store is None or not self.maker_enabled:
+            raise DashboardError("表情包工作台未启用，请在插件配置中开启 maker_enabled。")
+        return self.maker_store
+
+    @staticmethod
+    def maker_limits() -> dict[str, Any]:
+        return {
+            "templates": MAX_TEMPLATES,
+            "slots": MAX_SLOTS,
+            "image_slots": MAX_IMAGE_SLOTS,
+            "text_slots": MAX_TEXT_SLOTS,
+            "keywords": MAX_KEYWORDS,
+            "asset_mb": MAX_ASSET_BYTES // 1024 // 1024,
+            "canvas": {
+                "min": MIN_CANVAS,
+                "max": MAX_CANVAS,
+                "max_pixels": MAX_CANVAS_PIXELS,
+            },
+            "fit_modes": list(FIT_MODES),
+            "alignments": list(ALIGNMENTS),
+            "vertical_alignments": list(VERTICAL_ALIGNMENTS),
+        }
+
+    def maker_overview(self) -> dict[str, Any]:
+        total = len(self.maker_store.keys()) if self.maker_store is not None else 0
+        return {
+            "enabled": self.maker_enabled,
+            "total": total,
+            "limits": self.maker_limits(),
+        }
+
+    def _reserved_maker_keys(self) -> set[str]:
+        """Keys already owned by non-maker memes, so drafts cannot shadow them."""
+        reserved: set[str] = set()
+        for meme in self.engine.memes:
+            if self._source_of(meme) == "maker":
+                continue
+            key = str(getattr(meme, "key", "")).strip()
+            if key:
+                reserved.add(key)
+        return reserved
+
+    def _asset_data_url(
+        self,
+        store: MakerStore,
+        template: MakerTemplate,
+        name: str | None,
+    ) -> str | None:
+        path = store.asset_path(template, name)
+        if path is None:
+            return None
+        try:
+            if path.stat().st_size > self.max_preview_bytes:
+                return None
+            data = path.read_bytes()
+        except OSError:
+            return None
+        media_type = mimetypes.guess_type(path.name)[0] or self._guess_media_type(data)
+        return self._data_url(data, media_type)
+
+    def _template_summary(self, store: MakerStore, template: MakerTemplate) -> dict[str, Any]:
+        summary = template.summary()
+        summary["has_base"] = store.asset_path(template, template.base) is not None
+        summary["has_overlay"] = store.asset_path(template, template.overlay) is not None
+        summary["loaded"] = isinstance(self.engine.resolve(template.key), MakerMeme)
+        return summary
+
+    def maker_templates(self) -> dict[str, Any]:
+        store = self._require_maker()
+        items = [self._template_summary(store, template) for template in store.templates()]
+        return {
+            "items": items,
+            "total": len(items),
+            "limits": self.maker_limits(),
+        }
+
+    def maker_template(self, key: str) -> dict[str, Any]:
+        store = self._require_maker()
+        try:
+            template = store.load(key)
+        except MakerError as exc:
+            raise DashboardError(str(exc)) from exc
+        item = self._template_summary(store, template)
+        item["base_data_url"] = self._asset_data_url(store, template, template.base)
+        item["overlay_data_url"] = self._asset_data_url(store, template, template.overlay)
+        return {"item": item, "limits": self.maker_limits()}
+
+    def maker_scaffold(
+        self,
+        key: str,
+        keywords: Any,
+        *,
+        width: int = 640,
+        height: int = 640,
+        title: str = "",
+        with_image_slot: bool = False,
+    ) -> dict[str, Any]:
+        """Return a ready-to-edit bottom-caption draft for the workbench."""
+        self._require_maker()
+        try:
+            bounded_width = max(MIN_CANVAS, min(int(width), MAX_CANVAS))
+            bounded_height = max(MIN_CANVAS, min(int(height), MAX_CANVAS))
+        except (TypeError, ValueError) as exc:
+            raise DashboardError("画布尺寸无效。") from exc
+        words: Any = keywords if isinstance(keywords, str) else list(keywords or [])
+        try:
+            return {
+                "draft": caption_template_payload(
+                    str(key or "").strip() or "my_meme",
+                    words,
+                    width=bounded_width,
+                    height=bounded_height,
+                    title=title,
+                    with_image_slot=with_image_slot,
+                )
+            }
+        except MakerError as exc:
+            raise DashboardError(str(exc)) from exc
+
+    def maker_save(
+        self,
+        payload: dict[str, Any],
+        *,
+        base_data: bytes | None = None,
+        overlay_data: bytes | None = None,
+        remove_base: bool = False,
+        remove_overlay: bool = False,
+    ) -> dict[str, Any]:
+        store = self._require_maker()
+        try:
+            template = store.save(
+                payload,
+                base_data=base_data,
+                overlay_data=overlay_data,
+                remove_base=remove_base,
+                remove_overlay=remove_overlay,
+                reserved_keys=self._reserved_maker_keys(),
+            )
+        except MakerError as exc:
+            raise DashboardError(str(exc)) from exc
+        except OSError as exc:
+            raise DashboardError(f"模板写入失败：{exc}") from exc
+        return {"item": self._template_summary(store, template)}
+
+    def maker_delete(self, key: str) -> dict[str, Any]:
+        store = self._require_maker()
+        try:
+            removed = store.delete(key)
+        except MakerError as exc:
+            raise DashboardError(str(exc)) from exc
+        return {"key": removed}
+
+    @staticmethod
+    def decode_upload(value: Any) -> bytes:
+        """Decode one Dashboard image upload, mapping errors to DashboardError."""
+        try:
+            return decode_data_url(value)
+        except MakerError as exc:
+            raise DashboardError(str(exc)) from exc
+
+    async def maker_preview(
+        self,
+        payload: dict[str, Any],
+        *,
+        base_data: bytes | None = None,
+        overlay_data: bytes | None = None,
+        remove_base: bool = False,
+        remove_overlay: bool = False,
+    ) -> dict[str, str]:
+        """Render an unsaved draft in a scratch directory so editing stays safe."""
+        store = self._require_maker()
+        try:
+            async with self._preview_lock:
+                image = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._render_draft,
+                        store,
+                        payload,
+                        base_data,
+                        overlay_data,
+                        remove_base,
+                        remove_overlay,
+                    ),
+                    timeout=30,
+                )
+        except MakerError as exc:
+            raise DashboardError(str(exc)) from exc
+        except ImageRenderError as exc:
+            raise DashboardError(f"预览渲染失败：{exc}") from exc
+        except asyncio.TimeoutError as exc:
+            raise DashboardError("预览渲染超时，请缩小画布或减少图层。") from exc
+        except OSError as exc:
+            raise DashboardError(f"预览渲染失败：{exc}") from exc
+        if len(image) > self.max_preview_bytes:
+            raise DashboardError(
+                f"预览图片超过 {self.max_preview_bytes // 1024 // 1024} MB 限制。"
+            )
+        media_type = self._guess_media_type(image)
+        return {"media_type": media_type, "data_url": self._data_url(image, media_type)}
+
+    @staticmethod
+    def _render_draft(
+        store: MakerStore,
+        payload: dict[str, Any],
+        base_data: bytes | None,
+        overlay_data: bytes | None,
+        remove_base: bool,
+        remove_overlay: bool,
+    ) -> bytes:
+        draft = dict(payload or {})
+        if not str(draft.get("key") or "").strip():
+            draft["key"] = "draft_preview"
+        base = base_data
+        overlay = overlay_data
+        if base is None or overlay is None:
+            try:
+                saved = store.load(str(draft["key"]))
+            except MakerError:
+                saved = None
+            if saved is not None:
+                if base is None and not remove_base:
+                    path = store.asset_path(saved, saved.base)
+                    base = path.read_bytes() if path is not None else None
+                if overlay is None and not remove_overlay:
+                    path = store.asset_path(saved, saved.overlay)
+                    overlay = path.read_bytes() if path is not None else None
+        with tempfile.TemporaryDirectory(prefix="meme-forge-draft-") as scratch_root:
+            scratch = MakerStore(Path(scratch_root))
+            scratch.ensure_root()
+            template = scratch.save(draft, base_data=base, overlay_data=overlay)
+            return MakerMeme(template, scratch).generate_preview()

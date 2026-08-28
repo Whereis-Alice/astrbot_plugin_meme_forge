@@ -72,6 +72,29 @@ GitHub 仓库公开可见不代表授予复制、修改、分发或素材使用�
 取得上游作者及相关素材权利人的授权；Meme 工坊的 AGPL-3.0-or-later 许可证不覆盖
 运行时下载的 Gouqi 素材。
 
+## Evaluated but not used
+
+### meme_maker
+
+- Project: https://github.com/dionaka/meme_maker
+- Author: dionaka
+- Declared license: none
+
+该仓库启发了本插件的 Meme Maker 功能，但其代码没有被引入：上游是概念验证性质的
+固定区域贴图脚本，依赖 OpenCV 与 dlib，且在检视时未声明任何许可证。Meme 工坊的
+图层化模板、约束校验和渲染流程均基于本项目已有的 Pillow 成像层独立实现。
+
+### astrbot_plugin_apiver_meme_drawer_arcaea_pjsk
+
+- Project: https://github.com/kamicry/astrbot_plugin_apiver_meme_drawer_arcaea_pjsk
+- Author: kamicry
+- Declared license: 表述冲突（仓库内同时出现 AGPL 与 MIT 声明）
+
+本插件只借鉴了「分步向导式贴图」这一交互形式，没有引入其代码或资源。不采用的原因：
+许可声明自相矛盾，无法确认再分发条件；核心功能依赖用户自行部署的 Vercel 接口，与本
+插件「默认本地渲染、不引入外部服务依赖」的边界不符；仓库随包分发约 26 张 SEGA /
+lowiro 作品的曲绘，本项目不分发第三方版权素材。
+
 ## No Endorsement
 
 References to upstream project names identify technical provenance only. They

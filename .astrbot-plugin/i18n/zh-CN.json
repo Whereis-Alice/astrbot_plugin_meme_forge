@@ -5,7 +5,7 @@
   "pages": {
     "meme-forge": {
       "title": "Meme 工坊",
-      "description": "查看、筛选和管理已加载的 Meme 表情包。"
+      "description": "查看、筛选和管理已加载的 Meme 表情包，并在工作台里制作自己的表情模板。"
     }
   }
 }

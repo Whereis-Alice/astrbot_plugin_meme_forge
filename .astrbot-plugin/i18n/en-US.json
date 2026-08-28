@@ -5,7 +5,7 @@
   "pages": {
     "meme-forge": {
       "title": "Meme Forge",
-      "description": "Browse and manage loaded Meme templates."
+      "description": "Browse and manage loaded Meme templates, and build your own in the maker workspace."
     }
   }
 }

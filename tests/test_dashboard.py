@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import base64
+import io
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
 
+from PIL import Image
+
 from astrbot_plugin_meme_forge.core.dashboard import DashboardError, MemeDashboard
 from astrbot_plugin_meme_forge.core.history import MemeUsageHistory
+from astrbot_plugin_meme_forge.core.maker import MakerStore
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"x" * 32
 
@@ -237,6 +242,139 @@ class MemeDashboardTests(unittest.IsolatedAsyncioTestCase):
         summaries = {item["key"]: item for item in self.dashboard.catalog()["items"]}
         self.assertTrue(summaries["one"]["has_materials"])
         self.assertFalse(summaries["two"]["has_materials"])
+
+
+class MakerDashboardTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        self.engine = FakeEngine()
+        self.extension = SimpleNamespace(meme_home=self.root / "meme-home")
+        self.gouqi_extension = SimpleNamespace(assets_root=self.root / "gouqi-assets")
+        self.store = MakerStore(self.root / "maker")
+        self.store.ensure_root()
+        self.dashboard = MemeDashboard(
+            self.engine,
+            self.extension,
+            {"dashboard_preview_max_mb": 4, "trigger_prefix": "meme"},
+            gouqi_extension=self.gouqi_extension,
+            maker_store=self.store,
+        )
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    @staticmethod
+    def _png(color: str = "#38bdf8", size: tuple[int, int] = (160, 120)) -> bytes:
+        output = io.BytesIO()
+        Image.new("RGB", size, color).save(output, format="PNG")
+        return output.getvalue()
+
+    def _draft(self, key: str = "my_meme") -> dict:
+        return {
+            "key": key,
+            "title": "工作台样例",
+            "keywords": ["工作台样例"],
+            "width": 240,
+            "height": 240,
+            "background": "#101418",
+            "slots": [
+                {"type": "image", "x": 10, "y": 10, "width": 220, "height": 150},
+                {"type": "text", "x": 10, "y": 170, "width": 220, "height": 56},
+            ],
+        }
+
+    async def test_overview_and_limits_report_maker_state(self) -> None:
+        overview = self.dashboard.overview(
+            MemeUsageHistory(),
+            SimpleNamespace(
+                installed=False,
+                tag=None,
+                library_valid=False,
+                resources_present=False,
+            ),
+        )
+        self.assertTrue(overview["maker"]["enabled"])
+        self.assertEqual(overview["maker"]["total"], 0)
+        self.assertGreaterEqual(overview["maker"]["limits"]["templates"], 1)
+        self.assertIn("cover", overview["maker"]["limits"]["fit_modes"])
+
+    async def test_save_list_detail_and_delete_roundtrip(self) -> None:
+        saved = self.dashboard.maker_save(self._draft(), overlay_data=self._png("#fb7185"))
+        self.assertEqual(saved["item"]["key"], "my_meme")
+        self.assertTrue(saved["item"]["has_overlay"])
+        self.assertFalse(saved["item"]["has_base"])
+        self.assertFalse(saved["item"]["loaded"])
+
+        listing = self.dashboard.maker_templates()
+        self.assertEqual([item["key"] for item in listing["items"]], ["my_meme"])
+
+        detail = self.dashboard.maker_template("my_meme")
+        self.assertIsNone(detail["item"]["base_data_url"])
+        self.assertTrue(detail["item"]["overlay_data_url"].startswith("data:image/png;"))
+
+        self.dashboard.maker_delete("my_meme")
+        self.assertEqual(self.dashboard.maker_templates()["total"], 0)
+        with self.assertRaises(DashboardError):
+            self.dashboard.maker_template("my_meme")
+        with self.assertRaises(DashboardError):
+            self.dashboard.maker_delete("my_meme")
+
+    async def test_save_rejects_keys_owned_by_loaded_memes(self) -> None:
+        draft = self._draft("one")
+        with self.assertRaises(DashboardError) as caught:
+            self.dashboard.maker_save(draft)
+        self.assertIn("冲突", str(caught.exception))
+
+    async def test_preview_renders_unsaved_draft_and_reuses_stored_assets(self) -> None:
+        preview = await self.dashboard.maker_preview(self._draft("draft_only"))
+        self.assertTrue(preview["data_url"].startswith("data:image/png;base64,"))
+        self.assertEqual(self.dashboard.maker_templates()["total"], 0)
+
+        self.dashboard.maker_save(self._draft("stored"), base_data=self._png("#22d3ee"))
+        stored = self.dashboard.maker_template("stored")
+        self.assertTrue(stored["item"]["base_data_url"].startswith("data:image/png;"))
+
+        reused = await self.dashboard.maker_preview(self._draft("stored"))
+        self.assertTrue(reused["data_url"].startswith("data:image/png;base64,"))
+
+        with self.assertRaises(DashboardError):
+            await self.dashboard.maker_preview({**self._draft("stored"), "slots": []})
+
+    async def test_scaffold_and_upload_decoding_report_readable_errors(self) -> None:
+        draft = self.dashboard.maker_scaffold("caption_demo", "字幕 demo", height=480)["draft"]
+        self.assertEqual(draft["key"], "caption_demo")
+        self.assertEqual(draft["keywords"], ["字幕", "demo"])
+        self.assertEqual([slot["type"] for slot in draft["slots"]], ["text"])
+
+        with_image = self.dashboard.maker_scaffold(
+            "caption_photo", ["带图字幕"], with_image_slot=True
+        )["draft"]
+        self.assertEqual([slot["type"] for slot in with_image["slots"]], ["image", "text"])
+
+        self.assertEqual(
+            MemeDashboard.decode_upload(
+                "data:image/png;base64," + base64.b64encode(self._png()).decode("ascii")
+            ),
+            self._png(),
+        )
+        with self.assertRaises(DashboardError):
+            MemeDashboard.decode_upload("not-base64!!")
+
+    async def test_disabled_maker_rejects_every_workbench_call(self) -> None:
+        disabled = MemeDashboard(
+            self.engine,
+            self.extension,
+            {"maker_enabled": False},
+            gouqi_extension=self.gouqi_extension,
+            maker_store=self.store,
+        )
+        self.assertFalse(disabled.maker_enabled)
+        self.assertFalse(disabled.maker_overview()["enabled"])
+        with self.assertRaises(DashboardError):
+            disabled.maker_templates()
+        with self.assertRaises(DashboardError):
+            await disabled.maker_preview(self._draft())
 
 
 if __name__ == "__main__":

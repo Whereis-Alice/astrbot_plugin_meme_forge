@@ -266,5 +266,86 @@ class ResourceCheckTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(process.killed)
 
 
+class EngineCachingTests(unittest.TestCase):
+    """The chat hot path calls match()/is_disabled() for every message."""
+
+    @staticmethod
+    def _meme(key: str, *keywords: str) -> SimpleNamespace:
+        return SimpleNamespace(key=key, info=SimpleNamespace(keywords=list(keywords)))
+
+    def _engine(self, config: dict) -> MemeEngine:
+        engine = MemeEngine(config)
+        engine.memes = [self._meme("alpha", "阿尔法"), self._meme("beta", "贝塔")]
+        engine._by_key = {meme.key: meme for meme in engine.memes}
+        return engine
+
+    def test_alias_map_is_rebuilt_only_when_config_changes(self) -> None:
+        config: dict = {"keyword_aliases": [{"alias": "a1", "original": "alpha"}]}
+        engine = self._engine(config)
+
+        self.assertIsNotNone(engine.match("a1"))
+        first = engine._sorted_triggers
+        self.assertIsNotNone(engine.match("阿尔法"))
+        self.assertIs(engine._sorted_triggers, first, "unchanged config must reuse cache")
+
+        config["keyword_aliases"] = [{"alias": "b1", "original": "beta"}]
+        match = engine.match("b1")
+        self.assertIsNotNone(match)
+        assert match is not None
+        self.assertEqual(match.meme.key, "beta")
+        self.assertIsNone(engine.match("a1"))
+
+    def test_disabled_keys_resolve_keywords_and_aliases(self) -> None:
+        config: dict = {
+            "disabled_memes": ["阿尔法"],
+            "keyword_aliases": [{"alias": "b1", "original": "beta"}],
+        }
+        engine = self._engine(config)
+        alpha, beta = engine.memes
+
+        self.assertTrue(engine.is_disabled(alpha))
+        self.assertFalse(engine.is_disabled(beta))
+        self.assertIn("alpha", engine.disabled_keys())
+        cached = engine.disabled_keys()
+        self.assertIs(cached, engine.disabled_keys())
+
+        config["disabled_memes"] = ["b1"]
+        self.assertFalse(engine.is_disabled(alpha))
+        self.assertTrue(engine.is_disabled(beta))
+
+        config["disabled_memes"] = []
+        self.assertEqual(engine.disabled_keys(), frozenset())
+        self.assertFalse(engine.is_disabled(beta))
+
+    def test_duplicate_triggers_are_summarised_once(self) -> None:
+        first = self._meme("first", "共享", "共享2")
+        second = self._meme("second", "共享")
+        third = self._meme("first", "另一个")
+        engine = MemeEngine({})
+        engine.set_extension_memes("probe", [second, third])
+
+        with (
+            patch.object(engine, "_recover_module", return_value=SimpleNamespace(get_memes=lambda: [first])),
+            patch.object(engine, "_load_builtin_keys", return_value=frozenset({"first"})),
+            patch("astrbot_plugin_meme_forge.core.engine.logger") as log,
+        ):
+            engine.reload_memes()
+
+        self.assertEqual(log.warning.call_count, 0)
+        summaries = [
+            (call.args[0] % call.args[1:]) if len(call.args) > 1 else call.args[0]
+            for call in log.info.call_args_list
+        ]
+        self.assertEqual(
+            sum(1 for text in summaries if "重复" in text),
+            2,
+            f"expected one summary per collision kind, got {summaries}",
+        )
+        self.assertTrue(any("1 个触发词重复" in text for text in summaries))
+        self.assertTrue(any("1 个meme key重复" in text for text in summaries))
+        self.assertEqual(engine.get_source(second), "probe")
+
+
+
 if __name__ == "__main__":
     unittest.main()
