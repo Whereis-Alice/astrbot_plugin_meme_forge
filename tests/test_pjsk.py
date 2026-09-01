@@ -21,6 +21,7 @@ from astrbot_plugin_meme_forge.core.pjsk_command import (
     resolve_target,
     usage_lines,
 )
+from astrbot_plugin_meme_forge.main import MemeForgePlugin
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"x" * 32
 
@@ -139,8 +140,9 @@ class PjskArgumentTests(unittest.TestCase):
 
     def test_help_block_points_at_both_steps(self) -> None:
         text = "\n".join(usage_lines())
-        self.assertIn("/pjsk表情", text)
-        self.assertIn("/pjsk 206", text)
+        self.assertIn("/sk表情", text)
+        self.assertIn("/sk 206", text)
+        self.assertIn("/pjsk", text)
 
 
 class PjskRenderTests(unittest.TestCase):
@@ -233,6 +235,97 @@ class PjskAssetManagerTests(unittest.TestCase):
         self.assertEqual(status.images, 0)
         self.assertEqual(status.expected_images, pjsk_catalog.IMAGE_COUNT)
         self.assertFalse(status.font_installed)
+
+
+class PjskInstallProgressTests(unittest.IsolatedAsyncioTestCase):
+    """The installer must talk back while the slow steps are running."""
+
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        self.manager = PjskAssetManager(self.root, {})
+        self.events: list[str] = []
+
+        async def fake_download(url: str, destination: Path, limit: int):
+            destination.write_bytes(b"archive")
+            self.events.append("download")
+            return 15 * 1024 * 1024, "0" * 64
+
+        def fake_extract_stickers(archive: Path, staging: Path) -> int:
+            self.events.append("extract")
+            staging.mkdir(parents=True)
+            (staging / "placeholder.txt").write_text("ok", encoding="utf-8")
+            return 1234
+
+        def fake_extract_font(archive: Path, destination: Path) -> None:
+            destination.write_bytes(b"font")
+
+        self.manager._download = fake_download
+        self.manager._extract_stickers = fake_extract_stickers
+        self.manager._extract_font = fake_extract_font
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    async def test_progress_lands_between_download_and_extraction(self) -> None:
+        async def record(text: str) -> None:
+            self.events.append(text)
+
+        await self.manager.install(progress=record)
+
+        self.assertEqual(self.events[:2], ["download", "download"])
+        self.assertIn("30 MB", self.events[2])
+        self.assertEqual(self.events[3], "extract")
+
+    async def test_a_broken_callback_does_not_abort_the_install(self) -> None:
+        async def explode(text: str) -> None:
+            raise RuntimeError("adapter offline")
+
+        await self.manager.install(progress=explode)
+
+        self.assertIn("extract", self.events)
+        self.assertTrue(self.manager.manifest_path.is_file())
+
+    async def test_install_still_works_without_a_callback(self) -> None:
+        await self.manager.install()
+
+        self.assertIn("extract", self.events)
+
+
+class PjskFavoriteCommandTests(unittest.TestCase):
+    """Favorites accept the short 「sk」 selector and the older 「pjsk」 one."""
+
+    def setUp(self) -> None:
+        self.plugin = MemeForgePlugin.__new__(MemeForgePlugin)
+        self.plugin.config = {"trigger_prefix": "meme"}
+
+    def test_both_spellings_resolve_to_the_same_favorite(self) -> None:
+        for keyword in ("sk 206", "SK206", "sk：206", "pjsk 206", "PJSK206", "206"):
+            with self.subTest(keyword=keyword):
+                self.assertEqual(
+                    MemeForgePlugin._pjsk_unfavorite_key(keyword),
+                    "pjsk:206",
+                )
+
+    def test_prefix_is_only_dropped_when_a_selector_follows(self) -> None:
+        expected = pjsk_catalog.parse_selector("未来3").sticker.index
+        self.assertEqual(
+            MemeForgePlugin._pjsk_unfavorite_key("sk 未来3"),
+            f"pjsk:{expected}",
+        )
+        for keyword in ("", "sk", "pjsk", "sk未来3", "奶茶"):
+            with self.subTest(keyword=keyword):
+                self.assertIsNone(MemeForgePlugin._pjsk_unfavorite_key(keyword))
+
+    def test_favorite_command_prefers_the_short_prefix(self) -> None:
+        self.assertEqual(
+            self.plugin._favorite_command("pjsk:206", "PJSK"),
+            "/sk 206 你的文字",
+        )
+        self.assertEqual(
+            self.plugin._favorite_command("bubble_tea", "奶茶"),
+            "/meme 奶茶",
+        )
 
 
 def asset_stub(root: Path, **overrides: object) -> SimpleNamespace:
@@ -332,7 +425,7 @@ class PjskDashboardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["expected_images"], pjsk_catalog.IMAGE_COUNT)
         self.assertEqual(status["sticker_license"], "MIT")
         self.assertEqual(status["font_license"], "MIT")
-        self.assertEqual(status["install_command"], "/pjsk素材安装 确认")
+        self.assertEqual(status["install_command"], "/sk素材安装 确认")
         self.assertEqual(payload["output_scale"], 2)
 
     async def test_sticker_endpoint_returns_a_data_url(self) -> None:
@@ -350,7 +443,7 @@ class PjskDashboardTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_artwork_points_at_the_install_command(self) -> None:
         with self.assertRaises(DashboardError) as caught:
             await self.dashboard.pjsk_render({"index": 206, "text": "hello"})
-        self.assertIn("pjsk素材安装", str(caught.exception))
+        self.assertIn("sk素材安装", str(caught.exception))
 
     async def test_render_reports_the_effective_layout(self) -> None:
         self.write_artwork("Miku/Miku_03.png")
@@ -376,7 +469,7 @@ class PjskDashboardTests(unittest.IsolatedAsyncioTestCase):
         sticker = pjsk_catalog.sticker_by_index(206)
         options = coerce_options({"font_size": 40, "curve": True, "scale": 3})
         command = MemeDashboard._pjsk_command(sticker, "hello\nworld", options)
-        self.assertEqual(command, r"/pjsk 206 hello\nworld -s 40 -c --scale 3")
+        self.assertEqual(command, r"/sk 206 hello\nworld -s 40 -c --scale 3")
 
 
 if __name__ == "__main__":

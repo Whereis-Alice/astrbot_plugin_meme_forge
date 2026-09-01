@@ -420,9 +420,9 @@ function renderOverview() {
   if (!pjskOn) {
     noteInto($("pjsk-overview-note"), "在插件配置里打开 pjsk_enabled，就能用序号总览图挑姿势做表情。", null, "i-info");
   } else if (!pjsk.installed) {
-    noteInto($("pjsk-overview-note"), "素材还没下载。让管理员在聊天里发送「/pjsk素材安装 确认」，约 30 MB 的开源素材会存进插件数据目录。", "warn");
+    noteInto($("pjsk-overview-note"), "素材还没下载。让管理员在聊天里发送「/sk素材安装 确认」，约 30 MB 的开源素材会存进插件数据目录。", "warn");
   } else if (!pjsk.ready) {
-    noteInto($("pjsk-overview-note"), "素材不完整，再发一次「/pjsk素材安装 确认」即可续传缺失的贴图。", "danger");
+    noteInto($("pjsk-overview-note"), "素材不完整，再发一次「/sk素材安装 确认」即可续传缺失的贴图。", "danger");
   } else {
     noteInto($("pjsk-overview-note"), "文字全部由本地 Pillow 排版渲染，不请求任何外部接口。", null, "i-shield");
   }
@@ -1987,7 +1987,7 @@ function renderPjskAsset() {
   rows.appendChild(row("字体许可", status.font_license || "--", "mono"));
   const sticker = pjskSticker(state.pjsk.index);
   if (!status.ready) {
-    noteInto(note, "素材不完整，让管理员在聊天里发送「" + (status.install_command || "/pjsk素材安装 确认") + "」即可下载或续传。", "warn");
+    noteInto(note, "素材不完整，让管理员在聊天里发送「" + (status.install_command || "/sk素材安装 确认") + "」即可下载或续传。", "warn");
   } else if (sticker) {
     noteInto(note, "这张的官方数值：x " + sticker.x + " · y " + sticker.y + " · 旋转 " + sticker.rotate + "° · 字号 " + sticker.font_size + "，右侧留空就沿用它。", null, "i-info");
   } else {
@@ -2060,7 +2060,7 @@ function renderPjskShell() {
   $("pjsk-root").hidden = !on;
   $("pjsk-off").hidden = on;
   if (on) return;
-  const install = { code: (status && status.install_command) || "/pjsk素材安装 确认" };
+  const install = { code: (status && status.install_command) || "/sk素材安装 确认" };
   if (!pjsk.enabled) {
     setPjskOff("PJSK 表情工坊未启用", [
       "在插件配置里打开 ", { code: "pjsk_enabled" }, "，再让管理员在聊天里发送 ", install,

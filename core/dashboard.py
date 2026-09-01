@@ -762,7 +762,7 @@ class MemeDashboard:
             "sticker_license": getattr(manager, "STICKER_LICENSE", None),
             "font_repository": getattr(manager, "FONT_REPOSITORY", None),
             "font_license": getattr(manager, "FONT_LICENSE", None),
-            "install_command": "/pjsk素材安装 确认",
+            "install_command": "/sk素材安装 确认",
         }
 
     async def pjsk_status(self) -> dict[str, Any]:
@@ -834,7 +834,7 @@ class MemeDashboard:
     def _pjsk_read(path: Path) -> bytes:
         if not path.is_file():
             raise DashboardError(
-                "PJSK 素材还没安装，请管理员先执行 /pjsk素材安装 确认。"
+                "PJSK 素材还没安装，请管理员先执行 /sk素材安装 确认。"
             )
         return path.read_bytes()
 
@@ -862,7 +862,7 @@ class MemeDashboard:
     @staticmethod
     def _pjsk_command(sticker: Any, text: str, options: PjskArguments) -> str:
         """Chat command that reproduces the draft, offered for copying."""
-        parts = ["/pjsk", str(sticker.index)]
+        parts = ["/sk", str(sticker.index)]
         caption = pjsk.normalise_text(text)
         if caption:
             parts.append(caption.replace("\n", _LINE_BREAK_TOKEN))
@@ -893,7 +893,7 @@ class MemeDashboard:
         """Render one draft and report the geometry that was actually used."""
         if not image_path.is_file():
             raise DashboardError(
-                "PJSK 素材还没安装，请管理员先执行 /pjsk素材安装 确认。"
+                "PJSK 素材还没安装，请管理员先执行 /sk素材安装 确认。"
             )
         geometry = {key: value for key, value in options.items() if key != "scale"}
         layout = pjsk.resolve_layout(sticker, text, font_path=font_path, **geometry)

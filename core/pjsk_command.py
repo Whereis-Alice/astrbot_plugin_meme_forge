@@ -22,7 +22,7 @@ from .pjsk import (
     MIN_LINE_SPACING,
 )
 
-#: Sub-commands accepted in place of a selector, so /pjsk 表情 works too.
+#: Sub-commands accepted in place of a selector, so /sk 表情 works too.
 SHEET_TOKENS = frozenset({"表情", "表情包", "列表", "菜单", "角色", "list", "menu"})
 #: Tokens that ask for one random sticker.
 RANDOM_TOKENS = frozenset({"随机", "随机表情", "抽一张", "random"})
@@ -208,7 +208,7 @@ def resolve_target(words: Sequence[str]) -> PjskTarget:
     selection = catalog.parse_selector(items[0])
     if selection is None:
         raise PjskCommandError(
-            f"认不出「{items[0]}」。发送 /pjsk表情 查看序号总览，"
+            f"认不出「{items[0]}」。发送 /sk表情 查看序号总览，"
             "也可以用角色名加编号，例如 未来3 或 miku3。"
         )
     character = selection.character
@@ -240,20 +240,21 @@ def coerce_options(payload: Any) -> PjskArguments:
 
 
 def usage_lines() -> tuple[str, ...]:
-    """Help block shown by /pjsk帮助 and by /pjsk without arguments."""
+    """Help block shown by /sk帮助 and by /sk without arguments."""
     spacing = f"{_format_bound(MIN_LINE_SPACING)}~{_format_bound(MAX_LINE_SPACING)}"
     return (
         "PJSK 表情工坊：先看图选序号，再配文字。",
-        "1. /pjsk表情 → 角色总览图（26 位角色与序号区间）",
-        "2. /pjsk表情 未来 → 该角色全部姿势的缩略图",
-        "3. /pjsk 206 Wonderhoy → 生成表情包",
+        "1. /sk表情 → 角色总览图（26 位角色与序号区间）",
+        "2. /sk表情 未来 → 该角色全部姿势的缩略图",
+        "3. /sk 206 Wonderhoy → 生成表情包",
         "选择方式：序号 206、角色加编号 未来3 / miku3、只写角色名则随机一张。",
         "可选参数：",
         f"  -x 横向 0~{catalog.CANVAS_WIDTH}    -y 纵向 0~{catalog.CANVAS_HEIGHT}",
         f"  -r 旋转 -10~10    -s 字号 {MIN_FONT_SIZE}~{MAX_FONT_SIZE}",
         f"  -l 行距 {spacing}    -c 弧形排版    --scale 倍数 1~{MAX_OUTPUT_SCALE}",
-        "示例：/pjsk 未来3 早上好 -s 34 -r 2 -c",
+        "示例：/sk 未来3 早上好 -s 34 -r 2 -c",
         r"文字中的 \n 会换行。",
         f"单次文字最多 {MAX_TEXT_LINES} 行、{MAX_TEXT_LENGTH} 字。",
-        "其他：/pjsk随机 随机一张，/pjsk素材状态 查看素材。",
+        "其他：/sk随机 随机一张，/sk素材状态 查看素材。",
+        "旧写法 /pjsk、/pjsk表情 等仍然可用。",
     )

@@ -64,6 +64,8 @@ FAVORITES_KV_PREFIX = "meme_favorites_v1"
 USAGE_HISTORY_KV_KEY = "meme_usage_history_v1"
 DASHBOARD_BULK_LIMIT = 200
 PJSK_KEY_PREFIX = "pjsk:"
+#: Prefixes a user may type before a PJSK selector, longest first.
+PJSK_KEYWORD_PREFIXES = ("pjsk", "sk")
 PJSK_ALL_TOKENS = frozenset({"全部", "全部表情", "全图", "所有", "all"})
 PJSK_SHEET_CACHE = 6
 
@@ -127,6 +129,28 @@ class MemeForgePlugin(Star):
 
     def _history_limit(self) -> int:
         return max(100, min(int(self._config_value("history_limit", 500)), 2_000))
+
+    async def _notify(self, event: AstrMessageEvent, text: str) -> None:
+        """Send an interim notice right away, independent of the reply pipeline.
+
+        A handler that calls ``event.stop_event()`` is closed by AstrBot after its
+        first ``yield``, so long running commands must push progress notes out of
+        band instead of yielding them.
+        """
+        try:
+            await event.send(event.plain_result(text))
+        except Exception:  # noqa: BLE001 - platform adapters raise freely
+            logger.exception("[meme_forge] 无法发送进度提示")
+
+    @staticmethod
+    def _describe_error(exc: BaseException) -> str:
+        """Return a readable reason; some exceptions stringify to an empty text."""
+        text = str(exc).strip()
+        if text:
+            return text
+        if isinstance(exc, asyncio.TimeoutError):
+            return "网络超时"
+        return exc.__class__.__name__
 
     def _register_dashboard_apis(self) -> None:
         apis = [
@@ -598,15 +622,26 @@ class MemeForgePlugin(Star):
         """Return the command that reproduces one favorite."""
         index = self._pjsk_favorite_index(key)
         if index is not None:
-            return f"/pjsk {index} 你的文字"
+            return f"/sk {index} 你的文字"
         return self._format_trigger_command(trigger)
 
     @staticmethod
     def _pjsk_unfavorite_key(keyword: str) -> str | None:
-        """Return the favorite key matching a PJSK selector such as 「pjsk 206」."""
+        """Return the favorite key matching a PJSK selector such as 「sk 206」.
+
+        Both 「sk」 and the older 「pjsk」 spelling are accepted, and the marker is
+        only dropped when a selector really follows it, so a meme trigger that
+        happens to start with those letters keeps working.
+        """
         text = str(keyword or "").strip()
-        if text[:4].casefold() == "pjsk":
-            text = text[4:]
+        for prefix in PJSK_KEYWORD_PREFIXES:
+            if text[: len(prefix)].casefold() != prefix:
+                continue
+            remainder = text[len(prefix) :]
+            if remainder and not (remainder[0].isdigit() or remainder[0] in " :："):
+                continue
+            text = remainder
+            break
         text = text.lstrip(": ：").strip()
         if not text:
             return None
@@ -826,7 +861,7 @@ class MemeForgePlugin(Star):
             )
             return
         logger.info(
-            "[meme_forge] PJSK 素材未安装（底图 %d/%d），管理员可执行 /pjsk素材安装 确认",
+            "[meme_forge] PJSK 素材未安装（底图 %d/%d），管理员可执行 /sk素材安装 确认",
             status.images,
             status.expected_images,
         )
@@ -954,8 +989,9 @@ class MemeForgePlugin(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def check_resources(self, event: AstrMessageEvent):
         """检查并下载 meme-generator 所需的内置资源。"""
+        event.stop_event()
         timeout = float(self._config_value("resource_check_timeout", 180))
-        yield event.plain_result(f"开始检查 meme 资源，最长等待 {int(timeout)} 秒。")
+        await self._notify(event, f"开始检查 meme 资源，最长等待 {int(timeout)} 秒。")
         try:
             await self.engine.check_resources(timeout)
         except asyncio.TimeoutError:
@@ -964,7 +1000,11 @@ class MemeForgePlugin(Star):
             )
             return
         except (MemeEngineError, OSError) as exc:
-            yield event.plain_result(f"资源检查失败：{exc}")
+            yield event.plain_result(f"资源检查失败：{self._describe_error(exc)}")
+            return
+        except Exception as exc:  # noqa: BLE001 - report instead of failing silently
+            logger.exception("[meme_forge] meme 资源检查异常")
+            yield event.plain_result(f"资源检查失败：{self._describe_error(exc)}")
             return
         yield event.plain_result(
             f"资源检查完成，当前加载 {len(self.engine.memes)} 个 meme。"
@@ -1195,7 +1235,7 @@ class MemeForgePlugin(Star):
         ):
             lines.append("Gouqi 扩展可执行 /meme工坊Gouqi扩展安装 确认。")
         if pjsk_status is not None and not pjsk_status.ready:
-            lines.append("PJSK 素材可执行 /pjsk素材安装 确认。")
+            lines.append("PJSK 素材可执行 /sk素材安装 确认。")
         yield event.plain_result("\n".join(lines))
 
     @filter.command("meme工坊扩展安装", alias={"meme工坊扩展更新"})
@@ -1206,14 +1246,15 @@ class MemeForgePlugin(Star):
         confirmation: str | None = None,
     ):
         """安装或更新 anyliew/meme_emoji 的兼容扩展。"""
+        event.stop_event()
         if confirmation != "确认":
             yield event.plain_result(
                 "该操作会从上游下载约 400+ MB 资源，并临时占用约 1.1 GB 磁盘。"
                 "请使用 /meme工坊扩展安装 确认 继续。"
             )
             return
-        yield event.plain_result(
-            "开始安装 meme_emoji 扩展；下载和解压可能需要较长时间。"
+        await self._notify(
+            event, "开始安装 meme_emoji 扩展；下载和解压可能需要较长时间。"
         )
         try:
             status = await self.extension.install()
@@ -1223,7 +1264,11 @@ class MemeForgePlugin(Star):
             asyncio.TimeoutError,
             OSError,
         ) as exc:
-            yield event.plain_result(f"扩展安装失败：{exc}")
+            yield event.plain_result(f"扩展安装失败：{self._describe_error(exc)}")
+            return
+        except Exception as exc:  # noqa: BLE001 - report instead of failing silently
+            logger.exception("[meme_forge] meme_emoji 扩展安装异常")
+            yield event.plain_result(f"扩展安装失败：{self._describe_error(exc)}")
             return
         yield event.plain_result(
             f"meme_emoji 兼容扩展 {status.tag or ''} 已安装。请重启 AstrBot 后使用。"
@@ -1266,6 +1311,7 @@ class MemeForgePlugin(Star):
         confirmation: str | None = None,
     ):
         """Install reviewed Gouqi assets without executing upstream Python."""
+        event.stop_event()
         if confirmation != "确认":
             yield event.plain_result(
                 "Gouqi 上游目前未声明开源许可证。仅在你已获得作者及素材使用授权时继续；"
@@ -1273,7 +1319,7 @@ class MemeForgePlugin(Star):
                 "请使用 /meme工坊Gouqi扩展安装 确认 继续。"
             )
             return
-        yield event.plain_result("开始安装 Gouqi 审阅素材并校验每个文件。")
+        await self._notify(event, "开始安装 Gouqi 审阅素材并校验每个文件。")
         try:
             status = await self.gouqi_extension.install()
             loaded = await self._refresh_gouqi_memes(reload_engine=True)
@@ -1283,7 +1329,15 @@ class MemeForgePlugin(Star):
             asyncio.TimeoutError,
             OSError,
         ) as exc:
-            yield event.plain_result(f"Gouqi 扩展安装失败：{exc}")
+            yield event.plain_result(
+                f"Gouqi 扩展安装失败：{self._describe_error(exc)}"
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - report instead of failing silently
+            logger.exception("[meme_forge] Gouqi 扩展安装异常")
+            yield event.plain_result(
+                f"Gouqi 扩展安装失败：{self._describe_error(exc)}"
+            )
             return
         if not status.assets_valid:
             yield event.plain_result("Gouqi 扩展安装完成，但素材复核未通过，未加载。")
@@ -1750,7 +1804,7 @@ class MemeForgePlugin(Star):
         return (
             f"PJSK 素材还没装好（底图 {status.images}/{status.expected_images}，"
             f"字体{font_state}）。\n"
-            "请管理员执行 /pjsk素材安装 确认，首次安装需联网下载约 30 MB。"
+            "请管理员执行 /sk素材安装 确认，首次安装需联网下载约 30 MB。"
         )
 
     async def _pjsk_sheet(
@@ -1791,13 +1845,13 @@ class MemeForgePlugin(Star):
             selection = pjsk_catalog.parse_selector(text)
             if selection is None:
                 return None, (
-                    f"认不出「{text}」。直接发送 /pjsk表情 看角色总览，"
-                    "或者带上角色名，例如 /pjsk表情 未来。"
+                    f"认不出「{text}」。直接发送 /sk表情 看角色总览，"
+                    "或者带上角色名，例如 /sk表情 未来。"
                 )
             return await self._pjsk_sheet(selection.character), None
         except (PjskAssetError, OSError) as exc:
             logger.warning("[meme_forge] PJSK 总览图读取素材失败: %s", exc)
-            return None, "PJSK 素材读取失败，请管理员执行 /pjsk素材安装 确认。"
+            return None, "PJSK 素材读取失败，请管理员执行 /sk素材安装 确认。"
         except Exception:  # noqa: BLE001 - Pillow surfaces many unrelated errors
             logger.exception("[meme_forge] PJSK 总览图渲染异常")
             return None, "PJSK 总览图生成失败，请查看 AstrBot 日志。"
@@ -1873,7 +1927,7 @@ class MemeForgePlugin(Star):
             return None, "PJSK 表情生成超时。"
         except (PjskAssetError, OSError) as exc:
             logger.warning("[meme_forge] PJSK 素材缺失: %s", exc)
-            return None, "PJSK 素材不完整，请管理员执行 /pjsk素材安装 确认。"
+            return None, "PJSK 素材不完整，请管理员执行 /sk素材安装 确认。"
         except ValueError as exc:
             return None, str(exc)
         except Exception:  # noqa: BLE001 - Pillow surfaces many unrelated errors
@@ -1905,13 +1959,25 @@ class MemeForgePlugin(Star):
         if error is not None:
             return None, error
         return [
-            Comp.Plain(f"{sticker.label}（/pjsk {sticker.index}）\n"),
+            Comp.Plain(f"{sticker.label}（/sk {sticker.index}）\n"),
             Comp.Image.fromBytes(image),
         ], None
 
     @filter.command(
-        "pjsk表情",
-        alias={"pjsk列表", "pjsk菜单", "pjsk角色", "PJSK表情", "PJSK列表"},
+        "sk表情",
+        alias={
+            "sk列表",
+            "sk菜单",
+            "sk角色",
+            "SK表情",
+            "SK列表",
+            "pjsk表情",
+            "pjsk列表",
+            "pjsk菜单",
+            "pjsk角色",
+            "PJSK表情",
+            "PJSK列表",
+        },
     )
     async def pjsk_sheet_command(
         self,
@@ -1930,7 +1996,18 @@ class MemeForgePlugin(Star):
             return
         yield event.chain_result([Comp.Image.fromBytes(image)])
 
-    @filter.command("pjsk", alias={"PJSK", "pjsk制作", "pjsk贴纸"})
+    @filter.command(
+        "sk",
+        alias={
+            "SK",
+            "sk制作",
+            "sk贴纸",
+            "pjsk",
+            "PJSK",
+            "pjsk制作",
+            "pjsk贴纸",
+        },
+    )
     async def pjsk_sticker_command(
         self,
         event: AstrMessageEvent,
@@ -1986,7 +2063,18 @@ class MemeForgePlugin(Star):
             return
         yield event.chain_result([Comp.Image.fromBytes(image)])
 
-    @filter.command("pjsk随机", alias={"随机pjsk", "PJSK随机", "pjsk抽一张"})
+    @filter.command(
+        "sk随机",
+        alias={
+            "随机sk",
+            "SK随机",
+            "sk抽一张",
+            "pjsk随机",
+            "随机pjsk",
+            "PJSK随机",
+            "pjsk抽一张",
+        },
+    )
     async def pjsk_random_command(self, event: AstrMessageEvent, *args: str):
         """从 359 张底图里随机抽一张并配上文字。"""
         event.stop_event()
@@ -2000,13 +2088,33 @@ class MemeForgePlugin(Star):
             return
         yield event.chain_result(chain)
 
-    @filter.command("pjsk帮助", alias={"pjsk用法", "PJSK帮助", "pjsk说明"})
+    @filter.command(
+        "sk帮助",
+        alias={
+            "sk用法",
+            "SK帮助",
+            "sk说明",
+            "pjsk帮助",
+            "pjsk用法",
+            "PJSK帮助",
+            "pjsk说明",
+        },
+    )
     async def pjsk_help_command(self, event: AstrMessageEvent):
         """PJSK 表情工坊的完整用法。"""
         event.stop_event()
         yield event.plain_result("\n".join(usage_lines()))
 
-    @filter.command("pjsk素材安装", alias={"pjsk素材更新", "PJSK素材安装"})
+    @filter.command(
+        "sk素材安装",
+        alias={
+            "sk素材更新",
+            "SK素材安装",
+            "pjsk素材安装",
+            "pjsk素材更新",
+            "PJSK素材安装",
+        },
+    )
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def install_pjsk_assets(
         self,
@@ -2021,19 +2129,29 @@ class MemeForgePlugin(Star):
                 "Agnes4m/nonebot_plugin_pjsk，两者均为 MIT 许可；角色形象版权仍归 "
                 "SEGA / Colorful Palette，请只在同人二创允许的范围内使用。\n"
                 "安装会下载约 30 MB 素材到插件数据目录，不随插件更新。\n"
-                "请使用 /pjsk素材安装 确认 继续。"
+                "请使用 /sk素材安装 确认 继续。"
             )
             return
-        yield event.plain_result("开始下载并逐个校验 PJSK 素材，大约需要一两分钟。")
+        await self._notify(event, "开始下载并逐个校验 PJSK 素材，大约需要一两分钟。")
         try:
-            status = await self.pjsk_assets.install()
+            status = await self.pjsk_assets.install(
+                progress=lambda text: self._notify(event, text)
+            )
         except (
             PjskAssetError,
             aiohttp.ClientError,
             asyncio.TimeoutError,
             OSError,
         ) as exc:
-            yield event.plain_result(f"PJSK 素材安装失败：{exc}")
+            yield event.plain_result(
+                f"PJSK 素材安装失败：{self._describe_error(exc)}"
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - report instead of failing silently
+            logger.exception("[meme_forge] PJSK 素材安装异常")
+            yield event.plain_result(
+                f"PJSK 素材安装失败：{self._describe_error(exc)}"
+            )
             return
         self._pjsk_sheets.clear()
         pjsk.clear_font_cache()
@@ -2052,10 +2170,19 @@ class MemeForgePlugin(Star):
             return
         yield event.plain_result(
             f"PJSK 素材已就绪：{status.images} 张底图 + 手写字体。\n"
-            "先发送 /pjsk表情 看角色总览，再用 /pjsk 序号 文字 出图。"
+            "先发送 /sk表情 看角色总览，再用 /sk 序号 文字 出图。"
         )
 
-    @filter.command("pjsk素材状态", alias={"PJSK素材状态", "pjsk状态"})
+    @filter.command(
+        "sk素材状态",
+        alias={
+            "SK素材状态",
+            "sk状态",
+            "pjsk素材状态",
+            "PJSK素材状态",
+            "pjsk状态",
+        },
+    )
     async def pjsk_assets_status(self, event: AstrMessageEvent):
         """查看 PJSK 素材的安装与校验情况。"""
         event.stop_event()
@@ -2083,7 +2210,7 @@ class MemeForgePlugin(Star):
         if status.installed_at:
             lines.append(f"安装时间：{status.installed_at}")
         if not status.ready:
-            lines.append("管理员可执行 /pjsk素材安装 确认 下载素材（约 30 MB）。")
+            lines.append("管理员可执行 /sk素材安装 确认 下载素材（约 30 MB）。")
         yield event.plain_result("\n".join(lines))
 
     @filter.event_message_type(EventMessageType.ALL)

@@ -14,6 +14,7 @@ import os
 import shutil
 import tarfile
 import tempfile
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -27,6 +28,10 @@ from . import pjsk_catalog as catalog
 
 class PjskAssetError(RuntimeError):
     """Raised when the PJSK assets cannot be installed or verified."""
+
+
+ProgressCallback = Callable[[str], Awaitable[None]]
+"""Optional coroutine used to stream install progress back to the caller."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,7 +349,19 @@ class PjskAssetManager:
 
     # ----------------------------------------------------------------- install
 
-    async def install(self) -> PjskAssetStatus:
+    @staticmethod
+    async def _report(progress: ProgressCallback | None, text: str) -> None:
+        """Forward a progress note, never letting the callback break the install."""
+        if progress is None:
+            return
+        try:
+            await progress(text)
+        except Exception:  # noqa: BLE001 - progress reporting is best effort
+            logger.exception("[meme_forge] PJSK 安装进度回调失败")
+
+    async def install(
+        self, progress: ProgressCallback | None = None
+    ) -> PjskAssetStatus:
         """Download, verify and atomically swap in the PJSK assets."""
         if self._install_lock.locked():
             raise PjskAssetError("PJSK 素材安装任务已经在运行")
@@ -372,15 +389,21 @@ class PjskAssetManager:
             backup = self.root / ".img-backup"
             replaced_existing = False
             try:
-                _, archive_sha256 = await self._download(
+                sticker_bytes, archive_sha256 = await self._download(
                     self._codeload_url(self.STICKER_REPOSITORY, self.STICKER_COMMIT),
                     archive_path,
                     self.MAX_STICKER_ARCHIVE_BYTES,
                 )
-                await self._download(
+                font_bytes, _ = await self._download(
                     self._codeload_url(self.FONT_REPOSITORY, self.FONT_COMMIT),
                     font_archive,
                     self.MAX_FONT_ARCHIVE_BYTES,
+                )
+                megabytes = (sticker_bytes + font_bytes) / 1024 / 1024
+                await self._report(
+                    progress,
+                    f"素材下载完成（约 {megabytes:.0f} MB），"
+                    "开始逐个校验并解压，请稍候。",
                 )
                 # mkdtemp already created the directory; extraction wants it gone.
                 staging.rmdir()
