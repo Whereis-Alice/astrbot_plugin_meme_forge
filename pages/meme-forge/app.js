@@ -9,7 +9,7 @@ const DENSITY_KEY = "meme-forge-density";
 const VIEW_KEY = "meme-forge-view";
 const THUMB_KEY = "meme-forge-thumbs";
 const THEMES = ["aurora", "midnight", "carbon", "plum", "daylight", "paper"];
-const TABS = ["overview", "library", "maker", "records"];
+const TABS = ["overview", "library", "maker", "pjsk", "records"];
 
 const SOURCE_INFO = {
   meme_generator: { label: "内置", color: "#38bdf8" },
@@ -219,6 +219,27 @@ const state = {
     enabled: true,
     busy: false,
   },
+  pjsk: {
+    enabled: true,
+    loaded: false,
+    error: "",
+    characters: [],
+    items: [],
+    byIndex: new Map(),
+    status: null,
+    limits: null,
+    outputScale: 2,
+    character: "",
+    index: 0,
+    query: "",
+    text: "",
+    options: { x: null, y: null, rotate: null, font_size: null, line_spacing: null, curve: false, scale: null },
+    layout: null,
+    command: "",
+    dataUrl: null,
+    busy: false,
+    token: 0,
+  },
   records: { items: [], conversations: [], session: "", limit: HISTORY_LIMIT },
 };
 
@@ -384,6 +405,28 @@ function renderOverview() {
     limitBox.appendChild(el("p", null, "在插件配置中开启 maker_enabled 后即可使用工作台。"));
   }
 
+  const pjsk = data.pjsk || {};
+  const pjskOn = pjsk.enabled !== false;
+  const pjskRows = clear($("pjsk-overview-rows"));
+  pjskRows.appendChild(row("功能状态", pjskOn ? "已开启" : "已关闭", pjskOn ? "is-ok" : "is-off"));
+  pjskRows.appendChild(row("收录角色", String(pjsk.characters || 0), "mono"));
+  pjskRows.appendChild(row("贴纸姿势", String(pjsk.stickers || 0), "mono"));
+  pjskRows.appendChild(row(
+    "素材状态",
+    pjsk.ready ? "已就绪" : pjsk.installed ? "不完整" : "未安装",
+    pjsk.ready ? "is-ok" : pjsk.installed ? "is-warn" : "is-off",
+  ));
+  pjskRows.appendChild(row("本地贴图", (pjsk.images || 0) + " / " + (pjsk.expected_images || 0), "mono"));
+  if (!pjskOn) {
+    noteInto($("pjsk-overview-note"), "在插件配置里打开 pjsk_enabled，就能用序号总览图挑姿势做表情。", null, "i-info");
+  } else if (!pjsk.installed) {
+    noteInto($("pjsk-overview-note"), "素材还没下载。让管理员在聊天里发送「/pjsk素材安装 确认」，约 30 MB 的开源素材会存进插件数据目录。", "warn");
+  } else if (!pjsk.ready) {
+    noteInto($("pjsk-overview-note"), "素材不完整，再发一次「/pjsk素材安装 确认」即可续传缺失的贴图。", "danger");
+  } else {
+    noteInto($("pjsk-overview-note"), "文字全部由本地 Pillow 排版渲染，不请求任何外部接口。", null, "i-shield");
+  }
+
   renderBars($("top-memes"), data.top_memes, "还没有人用过表情");
   renderSessionList($("active-sessions"), data.active_conversations, (session) => {
     state.records.session = session;
@@ -400,6 +443,10 @@ function renderOverview() {
   makerBadge.classList.toggle("is-off", !makerOn);
   state.maker.enabled = makerOn;
   if (maker.limits) state.maker.limits = maker.limits;
+  const pjskBadge = $("tab-badge-pjsk");
+  pjskBadge.textContent = pjskOn ? String(pjsk.stickers || 0) : "关";
+  pjskBadge.classList.toggle("is-off", !pjskOn);
+  state.pjsk.enabled = pjskOn;
   updateStatusLine();
 }
 
@@ -420,6 +467,12 @@ function updateStatusLine() {
   if (state.tab === "maker") {
     parts.push((state.maker.templates.length || 0) + " 个自制模板");
     if (state.maker.dirty) parts.push("未保存");
+  }
+  if (state.tab === "pjsk" && state.pjsk.items.length) {
+    parts.push(state.pjsk.items.length + " 张 PJSK 贴纸");
+    const current = state.pjsk.byIndex.get(state.pjsk.index);
+    if (current) parts.push("当前 #" + current.index);
+    if (state.pjsk.busy) parts.push("渲染中");
   }
   $("status-left").textContent = parts.length ? parts.join(" · ") : "--";
 }
@@ -1617,6 +1670,628 @@ function clearAsset(which) {
 }
 
 
+/* ---------- PJSK 表情工坊 ---------- */
+
+// 后端一定会带上 limits，这份兜底只是为了在接口失败时表单仍然可用。
+const PJSK_FALLBACK_LIMITS = {
+  canvas: { width: 296, height: 256 },
+  rotate: [-10, 10],
+  font_size: [10, 100],
+  line_spacing: [0.8, 3],
+  scale: [1, 4],
+  text_lines: 6,
+  text_length: 160,
+};
+
+const pjskArtCache = new LruCache(240);
+
+function pjskLimits() {
+  return state.pjsk.limits || PJSK_FALLBACK_LIMITS;
+}
+
+function pjskBound(name) {
+  const pair = pjskLimits()[name] || PJSK_FALLBACK_LIMITS[name];
+  return [Number(pair[0]), Number(pair[1])];
+}
+
+function pjskCharacter(key) {
+  return state.pjsk.characters.find((item) => item.key === key) || null;
+}
+
+function pjskSticker(index) {
+  return state.pjsk.byIndex.get(Number(index)) || null;
+}
+
+function pjskTitleText() {
+  const sticker = pjskSticker(state.pjsk.index);
+  return sticker ? sticker.label || "#" + sticker.index : "未选择贴纸";
+}
+
+function pjskMb(bytes) {
+  const value = Number(bytes) || 0;
+  if (!value) return "--";
+  return (value / 1024 / 1024).toFixed(1) + " MB";
+}
+
+// 留空代表沿用贴纸目录里的官方数值，所以不能像 ctlNumber 那样把空串夹回下限。
+function pjskNumber(value, min, max, step, placeholder, onInput) {
+  const input = el("input", "mono");
+  input.type = "number";
+  input.min = String(min);
+  input.max = String(max);
+  input.step = String(step || 1);
+  input.placeholder = placeholder || "自动";
+  input.value = value === null || value === undefined ? "" : String(value);
+  input.addEventListener("change", () => {
+    const raw = input.value.trim();
+    const next = raw ? clamp(raw, min, max, null) : null;
+    if (next === null) {
+      input.value = "";
+      onInput(null);
+      return;
+    }
+    const rounded = Math.round(next * 100) / 100;
+    input.value = String(rounded);
+    onInput(rounded);
+  });
+  return input;
+}
+
+function pjskMatchCharacter(text) {
+  const needle = String(text || "").trim().toLowerCase();
+  if (!needle) return null;
+  for (const item of state.pjsk.characters) {
+    const names = [item.key, item.name, item.display_name].concat(item.aliases || []);
+    if (names.some((name) => String(name || "").toLowerCase() === needle)) return item;
+  }
+  return null;
+}
+
+// 支持和聊天指令一致的三种写法：206 / #206 / 未来3。
+function resolvePjskQuery(text) {
+  const raw = String(text || "").trim().replace(/^#/, "");
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) {
+    const index = Number(raw);
+    return state.pjsk.byIndex.has(index) ? index : null;
+  }
+  const match = raw.match(/^(.+?)\s*(\d+)$/);
+  if (!match) {
+    const only = pjskMatchCharacter(raw);
+    return only ? only.first_index : null;
+  }
+  const character = pjskMatchCharacter(match[1]);
+  if (!character) return null;
+  const local = Number(match[2]);
+  if (local < 1 || local > character.count) return null;
+  return character.first_index + local - 1;
+}
+
+function pjskFilteredCharacters() {
+  const query = state.pjsk.query.trim().toLowerCase();
+  if (!query) return state.pjsk.characters;
+  // 输入的是序号时不该把角色列表清空，交给回车跳转处理。
+  if (resolvePjskQuery(query) !== null) return state.pjsk.characters;
+  return state.pjsk.characters.filter((item) => {
+    const names = [item.key, item.name, item.display_name].concat(item.aliases || []);
+    return names.some((name) => String(name || "").toLowerCase().includes(query));
+  });
+}
+
+function renderPjskCharacters() {
+  const list = clear($("pjsk-chars"));
+  const items = pjskFilteredCharacters();
+  $("pjsk-char-count").textContent = String(items.length);
+  if (!items.length) {
+    list.appendChild(el("li", "empty is-inline", "没有匹配的角色"));
+    return;
+  }
+  for (const item of items) {
+    const li = el("li");
+    const button = el("button", "side-item");
+    button.type = "button";
+    if (state.pjsk.character === item.key) button.classList.add("is-active");
+    const copy = el("span");
+    const name = el("b");
+    const dot = el("i", "side-dot");
+    dot.style.background = item.color || "var(--accent)";
+    name.appendChild(dot);
+    name.appendChild(el("span", null, item.name || item.key));
+    copy.appendChild(name);
+    copy.appendChild(el("small", "mono", item.key + " · " + (item.range_label || "")));
+    button.appendChild(copy);
+    button.appendChild(el("span", "side-flag", item.count + " 张"));
+    button.addEventListener("click", () => selectPjskCharacter(item.key));
+    li.appendChild(button);
+    list.appendChild(li);
+  }
+}
+
+let pjskObserver = null;
+
+function ensurePjskObserver() {
+  if (pjskObserver) return pjskObserver;
+  pjskObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const node = entry.target;
+      pjskObserver.unobserve(node);
+      queueThumb(() => fillPjskThumb(node));
+    }
+  }, { root: $("pjsk-grid"), rootMargin: "200px 0px" });
+  return pjskObserver;
+}
+
+function paintPjskThumb(cell, dataUrl) {
+  const image = cell.querySelector("img");
+  if (!image) return;
+  image.src = dataUrl;
+  image.hidden = false;
+  cell.classList.remove("is-loading");
+}
+
+async function fillPjskThumb(cell) {
+  const index = Number(cell.dataset.index || 0);
+  if (!index || cell.dataset.filled === "1") return;
+  cell.dataset.filled = "1";
+  const cached = pjskArtCache.get(index);
+  if (cached) {
+    paintPjskThumb(cell, cached);
+    return;
+  }
+  try {
+    const payload = await apiGet("dashboard/pjsk/sticker", { index });
+    pjskArtCache.set(index, payload.data_url);
+    paintPjskThumb(cell, payload.data_url);
+  } catch {
+    cell.dataset.filled = "";
+    cell.classList.remove("is-loading");
+  }
+}
+
+function pjskCell(item) {
+  const cell = el("button", "pjsk-cell is-loading");
+  cell.type = "button";
+  cell.dataset.index = String(item.index);
+  cell.title = item.label || String(item.index);
+  if (state.pjsk.index === item.index) cell.classList.add("is-active");
+  const image = el("img");
+  image.alt = item.label || "";
+  image.loading = "lazy";
+  image.hidden = true;
+  cell.appendChild(image);
+  cell.appendChild(el("b", null, String(item.index)));
+  cell.addEventListener("click", () => selectPjskSticker(item.index, { render: true }));
+  return cell;
+}
+
+// 只滚动缩略图容器本身，避免顺带把整页拉走。
+function revealPjskCell(cell) {
+  const grid = $("pjsk-grid");
+  if (!grid || !cell) return;
+  const gridBox = grid.getBoundingClientRect();
+  const cellBox = cell.getBoundingClientRect();
+  if (!gridBox.height || !cellBox.height) return;
+  if (cellBox.top < gridBox.top) grid.scrollTop -= gridBox.top - cellBox.top + 4;
+  else if (cellBox.bottom > gridBox.bottom) grid.scrollTop += cellBox.bottom - gridBox.bottom + 4;
+}
+
+function markPjskActiveCell() {
+  for (const cell of $("pjsk-grid").querySelectorAll(".pjsk-cell")) {
+    const on = Number(cell.dataset.index) === state.pjsk.index;
+    cell.classList.toggle("is-active", on);
+    if (on) revealPjskCell(cell);
+  }
+}
+
+function pjskGridItems() {
+  const key = state.pjsk.character;
+  return key ? state.pjsk.items.filter((item) => item.character === key) : state.pjsk.items;
+}
+
+function renderPjskGrid() {
+  const grid = clear($("pjsk-grid"));
+  const items = pjskGridItems();
+  const character = pjskCharacter(state.pjsk.character);
+  $("pjsk-picker-meta").textContent = character
+    ? (character.name || character.key) + " · " + items.length + " 张 · 序号 " + (character.range_label || "--")
+    : items.length + " 张";
+  $("pjsk-grid-empty").hidden = items.length > 0;
+  if (!items.length) return;
+  const observer = ensurePjskObserver();
+  let active = null;
+  for (const item of items) {
+    const cell = pjskCell(item);
+    grid.appendChild(cell);
+    if (state.pjsk.index === item.index) active = cell;
+    const cached = pjskArtCache.get(item.index);
+    if (cached) {
+      cell.dataset.filled = "1";
+      paintPjskThumb(cell, cached);
+    } else {
+      observer.observe(cell);
+    }
+  }
+  if (active) revealPjskCell(active);
+}
+
+function renderPjskTextMeta() {
+  const value = state.pjsk.text;
+  const lines = value.trim() ? value.split("\n").filter((line) => line.trim()).length : 0;
+  const chars = value.replace(/\s/g, "").length;
+  const limits = pjskLimits();
+  const maxLines = Number(limits.text_lines) || PJSK_FALLBACK_LIMITS.text_lines;
+  const maxChars = Number(limits.text_length) || PJSK_FALLBACK_LIMITS.text_length;
+  const meta = $("pjsk-text-meta");
+  const over = lines > maxLines || chars > maxChars;
+  meta.textContent = lines + "/" + maxLines + " 行 · " + chars + "/" + maxChars + " 字" + (over ? " · 超出会被截断" : "");
+  meta.style.color = over ? "var(--warn)" : "";
+}
+
+function setPjskOption(name, value) {
+  state.pjsk.options[name] = value;
+  schedulePjskRender();
+}
+
+function renderPjskForm() {
+  const form = clear($("pjsk-form"));
+  const pjsk = state.pjsk;
+  const sticker = pjskSticker(pjsk.index);
+  const limits = pjskLimits();
+  const canvas = limits.canvas || PJSK_FALLBACK_LIMITS.canvas;
+  const rotate = pjskBound("rotate");
+  const fontSize = pjskBound("font_size");
+  const spacing = pjskBound("line_spacing");
+  const scale = pjskBound("scale");
+  const hint = (field, fallback) => (sticker && sticker[field] !== null && sticker[field] !== undefined ? String(sticker[field]) : fallback);
+  form.appendChild(makerPair(
+    "位置 X / Y",
+    pjskNumber(pjsk.options.x, 0, Number(canvas.width) || 296, 1, hint("x", "自动"), (value) => setPjskOption("x", value)),
+    pjskNumber(pjsk.options.y, 0, Number(canvas.height) || 256, 1, hint("y", "自动"), (value) => setPjskOption("y", value)),
+    "/",
+  ));
+  form.appendChild(makerRow("旋转 °", pjskNumber(pjsk.options.rotate, rotate[0], rotate[1], 0.5, hint("rotate", "自动"), (value) => setPjskOption("rotate", value))));
+  form.appendChild(makerRow("字号", pjskNumber(pjsk.options.font_size, fontSize[0], fontSize[1], 1, hint("font_size", "自动"), (value) => setPjskOption("font_size", value))));
+  form.appendChild(makerRow("行距", pjskNumber(pjsk.options.line_spacing, spacing[0], spacing[1], 0.05, "1.1", (value) => setPjskOption("line_spacing", value))));
+  const scaleValues = [""];
+  const scaleLabels = { "": "跟随配置 " + pjsk.outputScale + "×" };
+  for (let value = Math.max(1, Math.round(scale[0])); value <= Math.round(scale[1]); value += 1) {
+    scaleValues.push(String(value));
+    scaleLabels[String(value)] = value + "×";
+  }
+  const current = pjsk.options.scale === null || pjsk.options.scale === undefined ? "" : String(pjsk.options.scale);
+  form.appendChild(makerRow("输出倍数", ctlSelect(scaleValues, current, (value) => setPjskOption("scale", value ? Number(value) : null), scaleLabels)));
+  form.appendChild(makerCheck("弧形排版（等同 -c）", pjsk.options.curve, (value) => setPjskOption("curve", value)));
+}
+
+function renderPjskAsset() {
+  const rows = clear($("pjsk-asset-rows"));
+  const status = state.pjsk.status;
+  const note = $("pjsk-asset-note");
+  if (!status) {
+    rows.appendChild(row("素材状态", "读取中…", "is-off"));
+    noteInto(note, "正在读取 PJSK 素材状态。", null, "i-info");
+    return;
+  }
+  rows.appendChild(row(
+    "素材状态",
+    status.ready ? "已就绪" : status.installed ? "不完整" : "未安装",
+    status.ready ? "is-ok" : status.installed ? "is-warn" : "is-off",
+  ));
+  rows.appendChild(row("贴图", (status.images || 0) + " / " + (status.expected_images || 0), "mono"));
+  rows.appendChild(row("占用", pjskMb(status.image_bytes) + " / " + pjskMb(status.expected_image_bytes), "mono"));
+  rows.appendChild(row("字体", status.font_installed ? pjskMb(status.font_bytes) : "未安装", status.font_installed ? "mono" : "mono is-warn"));
+  rows.appendChild(row("素材版本", status.commit ? String(status.commit).slice(0, 10) : "--", "mono"));
+  rows.appendChild(row("安装时间", status.installed_at ? String(status.installed_at).slice(0, 16).replace("T", " ") : "--", "mono"));
+  rows.appendChild(row("贴图许可", status.sticker_license || "--", "mono"));
+  rows.appendChild(row("字体许可", status.font_license || "--", "mono"));
+  const sticker = pjskSticker(state.pjsk.index);
+  if (!status.ready) {
+    noteInto(note, "素材不完整，让管理员在聊天里发送「" + (status.install_command || "/pjsk素材安装 确认") + "」即可下载或续传。", "warn");
+  } else if (sticker) {
+    noteInto(note, "这张的官方数值：x " + sticker.x + " · y " + sticker.y + " · 旋转 " + sticker.rotate + "° · 字号 " + sticker.font_size + "，右侧留空就沿用它。", null, "i-info");
+  } else {
+    noteInto(note, "贴图与字体都是 MIT 许可的开源素材，插件本身不打包任何版权文件。", null, "i-shield");
+  }
+}
+
+function paintPjskPreview() {
+  const pjsk = state.pjsk;
+  const image = $("pjsk-image");
+  if (pjsk.dataUrl) {
+    image.src = pjsk.dataUrl;
+    image.hidden = false;
+    image.style.cursor = "zoom-in";
+    image.onclick = () => openLightbox(pjsk.dataUrl, pjskTitleText());
+  } else {
+    image.hidden = true;
+    image.removeAttribute("src");
+    image.onclick = null;
+  }
+  $("pjsk-placeholder").hidden = Boolean(pjsk.dataUrl);
+  const wrap = clear($("pjsk-cmd-wrap"));
+  wrap.hidden = !pjsk.command;
+  if (pjsk.command) wrap.appendChild(commandLine(pjsk.command));
+  const hint = $("pjsk-layout-hint");
+  const layout = pjsk.layout;
+  if (!layout) {
+    hint.textContent = "选一张贴纸就会自动渲染一次。";
+    return;
+  }
+  const parts = [
+    "x " + layout.x,
+    "y " + layout.y,
+    "旋转 " + layout.rotate + "°",
+    "字号 " + layout.font_size,
+    "行距 " + layout.line_spacing,
+    (layout.lines || []).length + " 行",
+  ];
+  if (layout.curve) parts.push("弧形");
+  hint.textContent = "实际排版 " + parts.join(" · ");
+}
+
+function renderPjskTools() {
+  const pjsk = state.pjsk;
+  const has = Boolean(pjskSticker(pjsk.index));
+  const many = pjsk.items.length > 1;
+  $("pjsk-title").textContent = pjskTitleText();
+  $("pjsk-render").disabled = pjsk.busy || !has;
+  $("pjsk-prev").disabled = !many;
+  $("pjsk-next").disabled = !many;
+  $("pjsk-lucky").disabled = !pjsk.items.length;
+  $("pjsk-save").disabled = !pjsk.dataUrl;
+  $("pjsk-text-default").disabled = !has;
+}
+
+function setPjskOff(title, parts) {
+  $("pjsk-off-title").textContent = title;
+  const copy = clear($("pjsk-off-copy"));
+  for (const part of parts) {
+    if (typeof part === "string") copy.appendChild(document.createTextNode(part));
+    else copy.appendChild(el("b", "mono", part.code));
+  }
+}
+
+// 素材没装齐时工作台没法预览，直接给出一句能照着做的说明。
+function renderPjskShell() {
+  const pjsk = state.pjsk;
+  const status = pjsk.status;
+  const on = pjsk.enabled && Boolean(status && status.ready) && pjsk.items.length > 0;
+  $("pjsk-root").hidden = !on;
+  $("pjsk-off").hidden = on;
+  if (on) return;
+  const install = { code: (status && status.install_command) || "/pjsk素材安装 确认" };
+  if (!pjsk.enabled) {
+    setPjskOff("PJSK 表情工坊未启用", [
+      "在插件配置里打开 ", { code: "pjsk_enabled" }, "，再让管理员在聊天里发送 ", install,
+      " 下载开源素材，就能在这里可视化做表情。",
+    ]);
+  } else if (pjsk.error) {
+    setPjskOff("PJSK 数据读取失败", [pjsk.error, " 点右下角的「刷新」可以重试。"]);
+  } else if (!pjsk.loaded) {
+    setPjskOff("正在读取 PJSK 素材", ["马上就好。"]);
+  } else if (!status || !status.installed) {
+    setPjskOff("PJSK 素材还没安装", [
+      "让管理员在聊天里发送 ", install, "，插件会下载约 30 MB 的开源贴图与字体到数据目录，安装完刷新本页即可。",
+    ]);
+  } else {
+    setPjskOff("PJSK 素材不完整", [
+      "本地只有 " + (status.images || 0) + " / " + (status.expected_images || 0) + " 张贴图。再发一次 ", install, " 会续传缺失的部分。",
+    ]);
+  }
+}
+
+function renderPjsk() {
+  renderPjskShell();
+  if ($("pjsk-root").hidden) {
+    updateStatusLine();
+    return;
+  }
+  renderPjskCharacters();
+  renderPjskGrid();
+  renderPjskForm();
+  renderPjskAsset();
+  renderPjskTextMeta();
+  paintPjskPreview();
+  renderPjskTools();
+  updateStatusLine();
+}
+
+function selectPjskSticker(index, options) {
+  const sticker = pjskSticker(index);
+  if (!sticker) return;
+  const pjsk = state.pjsk;
+  const changed = pjsk.index !== sticker.index;
+  pjsk.index = sticker.index;
+  if (pjsk.character !== sticker.character) {
+    pjsk.character = sticker.character;
+    renderPjskCharacters();
+    renderPjskGrid();
+  } else {
+    markPjskActiveCell();
+  }
+  if (changed) {
+    // 位置和字号是逐张调校过的，换姿势时回到官方数值；弧形和倍数属于风格，保留。
+    pjsk.options.x = null;
+    pjsk.options.y = null;
+    pjsk.options.rotate = null;
+    pjsk.options.font_size = null;
+  }
+  if (!pjsk.text.trim() && sticker.default_text) {
+    pjsk.text = sticker.default_text;
+    $("pjsk-text").value = pjsk.text;
+  }
+  renderPjskTextMeta();
+  renderPjskForm();
+  renderPjskAsset();
+  renderPjskTools();
+  if (options && options.render) runPjskRender({ quiet: true });
+}
+
+function selectPjskCharacter(key) {
+  const character = pjskCharacter(key);
+  if (!character) return;
+  state.pjsk.character = key;
+  renderPjskCharacters();
+  renderPjskGrid();
+  if (!pjskGridItems().some((item) => item.index === state.pjsk.index)) {
+    selectPjskSticker(character.first_index, { render: true });
+  }
+}
+
+function stepPjsk(delta) {
+  const items = state.pjsk.items;
+  if (!items.length) return;
+  const at = items.findIndex((item) => item.index === state.pjsk.index);
+  const next = items[(at + delta + items.length) % items.length];
+  if (next) selectPjskSticker(next.index, { render: true });
+}
+
+async function runPjskRender(options) {
+  const pjsk = state.pjsk;
+  const quiet = Boolean(options && options.quiet);
+  const sticker = pjskSticker(pjsk.index);
+  if (!sticker) {
+    if (!quiet) toast("先在下面挑一张贴纸", "error");
+    return;
+  }
+  const body = Object.assign({ index: sticker.index, text: pjsk.text }, pjsk.options);
+  const token = (pjsk.token += 1);
+  pjsk.busy = true;
+  renderPjskTools();
+  updateStatusLine();
+  try {
+    const payload = await apiPost("dashboard/pjsk/render", body);
+    if (token !== pjsk.token) return;
+    pjsk.dataUrl = payload.data_url;
+    pjsk.command = payload.command || "";
+    pjsk.layout = payload.layout || null;
+    paintPjskPreview();
+    if (!quiet) toast("渲染完成", "ok");
+  } catch (error) {
+    if (token === pjsk.token) reportError(error, "PJSK 渲染");
+  } finally {
+    if (token === pjsk.token) {
+      pjsk.busy = false;
+      renderPjskTools();
+      updateStatusLine();
+    }
+  }
+}
+
+// 改文字或参数时自动重渲染一次，节流后只发最后一次请求。
+const schedulePjskRender = debounce(() => {
+  if (state.tab !== "pjsk" || !state.pjsk.index) return;
+  runPjskRender({ quiet: true });
+}, 520);
+
+function savePjskImage() {
+  const pjsk = state.pjsk;
+  if (!pjsk.dataUrl) return;
+  const sticker = pjskSticker(pjsk.index);
+  const link = el("a");
+  link.href = pjsk.dataUrl;
+  link.download = "pjsk-" + (sticker ? sticker.index : "sticker") + ".png";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+async function loadPjsk() {
+  const pjsk = state.pjsk;
+  if (!pjsk.enabled) {
+    renderPjsk();
+    return;
+  }
+  try {
+    const [catalogPayload, statusPayload] = await Promise.all([
+      apiGet("dashboard/pjsk/characters"),
+      apiGet("dashboard/pjsk/status"),
+    ]);
+    pjsk.characters = catalogPayload.characters || [];
+    pjsk.items = catalogPayload.items || [];
+    pjsk.byIndex = new Map(pjsk.items.map((item) => [item.index, item]));
+    pjsk.limits = statusPayload.limits || catalogPayload.limits || pjsk.limits;
+    pjsk.outputScale = Number(statusPayload.output_scale || catalogPayload.output_scale) || pjsk.outputScale;
+    pjsk.status = statusPayload.status || null;
+    pjsk.error = "";
+    pjsk.loaded = true;
+  } catch (error) {
+    pjsk.loaded = false;
+    pjsk.error = (error && error.message) || String(error);
+    renderPjsk();
+    throw error;
+  }
+  const first = pjsk.byIndex.get(pjsk.index) || pjsk.items[0];
+  if (first) {
+    pjsk.index = first.index;
+    pjsk.character = first.character;
+    if (!pjsk.text.trim() && first.default_text) pjsk.text = first.default_text;
+    $("pjsk-text").value = pjsk.text;
+  }
+  renderPjsk();
+  if (!$("pjsk-root").hidden && pjsk.index) runPjskRender({ quiet: true });
+}
+
+function bindPjsk() {
+  const pjsk = state.pjsk;
+  const search = $("pjsk-search");
+  const filter = debounce(() => {
+    pjsk.query = search.value;
+    $("pjsk-search-clear").hidden = !search.value;
+    renderPjskCharacters();
+  }, 160);
+  search.addEventListener("input", filter);
+  search.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    const index = resolvePjskQuery(search.value);
+    if (index === null) {
+      toast("认不出这个角色或序号，试试 206 或 未来3", "error");
+      return;
+    }
+    selectPjskSticker(index, { render: true });
+  });
+  $("pjsk-search-clear").addEventListener("click", () => {
+    search.value = "";
+    pjsk.query = "";
+    $("pjsk-search-clear").hidden = true;
+    renderPjskCharacters();
+    search.focus();
+  });
+  $("pjsk-lucky").addEventListener("click", () => {
+    if (!pjsk.items.length) return;
+    const item = pjsk.items[Math.floor(Math.random() * pjsk.items.length)];
+    selectPjskSticker(item.index, { render: true });
+  });
+  $("pjsk-prev").addEventListener("click", () => stepPjsk(-1));
+  $("pjsk-next").addEventListener("click", () => stepPjsk(1));
+  $("pjsk-render").addEventListener("click", () => runPjskRender({}));
+  $("pjsk-text").addEventListener("input", (event) => {
+    pjsk.text = event.target.value;
+    renderPjskTextMeta();
+    schedulePjskRender();
+  });
+  $("pjsk-text-default").addEventListener("click", () => {
+    const sticker = pjskSticker(pjsk.index);
+    if (!sticker) return;
+    pjsk.text = sticker.default_text || "";
+    $("pjsk-text").value = pjsk.text;
+    renderPjskTextMeta();
+    runPjskRender({ quiet: true });
+  });
+  $("pjsk-reset").addEventListener("click", () => {
+    pjsk.options = { x: null, y: null, rotate: null, font_size: null, line_spacing: null, curve: false, scale: null };
+    renderPjskForm();
+    runPjskRender({ quiet: true });
+  });
+  $("pjsk-save").addEventListener("click", () => savePjskImage());
+  $("pjsk-reload").addEventListener("click", () => {
+    pjskArtCache.clear();
+    loadPjsk().catch((error) => reportError(error, "PJSK"));
+  });
+}
+
 /* ---------- 记录 ---------- */
 
 function recordRow(item) {
@@ -1689,7 +2364,7 @@ async function loadRecords() {
 
 /* ---------- 标签页 ---------- */
 
-const tabLoaded = { overview: false, library: false, maker: false, records: false };
+const tabLoaded = { overview: false, library: false, maker: false, pjsk: false, records: false };
 
 function moveInk() {
   const ink = $("tab-ink");
@@ -1705,6 +2380,7 @@ function ensureTabData(name) {
   let job = null;
   if (name === "library") job = loadLibrary(true);
   else if (name === "maker") job = loadMakerTemplates();
+  else if (name === "pjsk") job = loadPjsk();
   else if (name === "records") job = loadRecords();
   if (job) {
     job.catch((error) => {
@@ -2286,6 +2962,7 @@ async function boot() {
   bindLibrary();
   bindOverlays();
   bindMaker();
+  bindPjsk();
   renderBulkbar();
 
   if (!bridge || typeof bridge.ready !== "function") {

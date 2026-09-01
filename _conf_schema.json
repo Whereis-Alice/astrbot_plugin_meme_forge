@@ -222,6 +222,34 @@
     "type": "bool",
     "default": true
   },
+  "pjsk_enabled": {
+    "description": "启用 PJSK 表情工坊",
+    "hint": "开启后注册 /pjsk表情、/pjsk 等指令，并在 WebUI 显示“PJSK”页。底图与字体需管理员执行 /pjsk素材安装 确认 后才会下载，插件本体不附带任何素材。",
+    "type": "bool",
+    "default": true
+  },
+  "pjsk_download_timeout": {
+    "description": "PJSK 素材下载超时（秒）",
+    "hint": "首次安装需从两个 MIT 源仓库下载约 30 MB（359 张底图 + 手写字体），网络较慢时可调大。重载插件后生效。",
+    "type": "int",
+    "slider": {
+      "min": 120,
+      "max": 3600,
+      "step": 60
+    },
+    "default": 900
+  },
+  "pjsk_output_scale": {
+    "description": "PJSK 表情输出倍数",
+    "hint": "底图为 296x256，倍数越大越清晰、文件越大。单次可用 --scale 覆盖。",
+    "type": "int",
+    "slider": {
+      "min": 1,
+      "max": 4,
+      "step": 1
+    },
+    "default": 2
+  },
   "dashboard_preview_max_mb": {
     "description": "WebUI 单张预览和素材大小上限（MB）",
     "hint": "超过此限制的图片不会传送到浏览器。",

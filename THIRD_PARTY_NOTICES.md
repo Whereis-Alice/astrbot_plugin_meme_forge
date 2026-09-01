@@ -72,7 +72,47 @@ GitHub 仓库公开可见不代表授予复制、修改、分发或素材使用�
 取得上游作者及相关素材权利人的授权；Meme 工坊的 AGPL-3.0-or-later 许可证不覆盖
 运行时下载的 Gouqi 素材。
 
+## sekai-stickers
+
+- Project: https://github.com/TheOriginalAyaka/sekai-stickers
+- Author: TheOriginalAyaka and contributors
+- License: MIT License
+- Reviewed commit: `49189d2e63ed715df5de053261f3bc09d9e817f2`
+
+可选 PJSK 表情工坊的 359 张贴纸底图，以及每张图的默认文字位置、角度和字号，来自该仓库的
+`public/img` 与角色定义数据。Meme 工坊不打包这些文件；管理员执行 `/pjsk素材安装 确认` 后，
+安装器只从上述固定提交下载清单内的文件，并逐项校验相对路径、字节数和 Git blob 哈希
+（底图合计 22,374,334 字节）。
+
+MIT 许可覆盖该仓库的代码与文件组织。贴纸中的角色形象出自 SEGA / Colorful Palette /
+Crypton Future Media 的《プロジェクトセカイ カラフルステージ！ feat. 初音ミク》，相关版权归
+原权利人所有。本仓库的 AGPL-3.0-or-later 许可证不覆盖运行时下载的这些素材，部署者应确认
+自己的使用场景符合原权利人对二次创作的规定。
+
+## nonebot_plugin_pjsk
+
+- Project: https://github.com/Agnes4m/nonebot_plugin_pjsk
+- Authors: Agnes4m, lgc-NB2Dev and contributors
+- License: MIT License
+- Reviewed commit: `9d310136c199e156efc27dfbebebc1f7e72f16bc`
+
+PJSK 表情使用的手写字体 `YurukaFangTang.ttf`（5,152,848 字节）由该仓库分发，安装器从同一
+固定提交下载并校验哈希。除这一个字体文件外，本插件没有使用其代码。
+
 ## Evaluated but not used
+
+### astrbot_plugin_pjsk
+
+- Project: https://github.com/camera-2018/astrbot_plugin_pjsk
+- Author: camera-2018
+- Declared license: README 写明 MIT，但仓库内没有 LICENSE 文件
+
+该插件是本项目 PJSK 表情功能的直接功能参考，但其代码没有被引入。原因有三：渲染链路依赖
+Playwright + Chromium，插件启动时会自动安装浏览器运行文件与 Linux 系统依赖（可能需要 root
+权限），与本项目「只用 Pillow 在本机渲染、不引入浏览器运行时」的边界不符；许可证只在 README
+里提到、缺少 LICENSE 文件，再分发条件无法确认；其仓库随包分发了手写字体，本插件改为在管理员
+确认后从原始 MIT 仓库下载。Meme 工坊借鉴的是「先看列表、再按编号出图」这一交互形式，并把它
+改成带序号的图片总览加全局序号选择。
 
 ### meme_maker
 

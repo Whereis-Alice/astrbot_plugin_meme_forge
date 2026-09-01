@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from astrbot_plugin_meme_forge.core import pjsk_catalog
 from astrbot_plugin_meme_forge.core.extensions import (
     ExtensionRelease,
     ExtensionStatus,
@@ -13,6 +14,7 @@ from astrbot_plugin_meme_forge.core.gouqi_extension import (
     GouqiExtensionStatus,
     GouqiSourceRevision,
 )
+from astrbot_plugin_meme_forge.core.pjsk_assets import PjskAssetStatus
 from astrbot_plugin_meme_forge.core.updates import (
     UpdateCheckError,
     compare_engine_versions,
@@ -105,6 +107,24 @@ class UpdateCommandTests(unittest.IsolatedAsyncioTestCase):
         )
 
     @staticmethod
+    def pjsk_assets(*, ready: bool = True) -> SimpleNamespace:
+        return SimpleNamespace(
+            STICKER_COMMIT=pjsk_catalog.SOURCE_COMMIT,
+            FONT_COMMIT="9d310136c199e156efc27dfbebebc1f7e72f16bc",
+            status=lambda: PjskAssetStatus(
+                installed=ready,
+                ready=ready,
+                images=pjsk_catalog.IMAGE_COUNT if ready else 0,
+                image_bytes=pjsk_catalog.IMAGE_BYTES if ready else 0,
+                font_installed=ready,
+                commit=pjsk_catalog.SOURCE_COMMIT if ready else None,
+                font_commit=None,
+                installed_at=None,
+                verified=ready,
+            ),
+        )
+
+    @staticmethod
     async def collect(generator) -> str:
         return "\n".join([result async for result in generator])
 
@@ -120,6 +140,7 @@ class UpdateCommandTests(unittest.IsolatedAsyncioTestCase):
             status=lambda: self.extension_status("v0.0.6+build.42"),
         )
         plugin.gouqi_extension = self.gouqi_extension()
+        plugin.pjsk_assets = self.pjsk_assets()
 
         with patch(
             "astrbot_plugin_meme_forge.main.fetch_latest_compatible_meme_generator",
@@ -140,6 +161,7 @@ class UpdateCommandTests(unittest.IsolatedAsyncioTestCase):
             status=lambda: self.extension_status("v1.0.0"),
         )
         plugin.gouqi_extension = self.gouqi_extension()
+        plugin.pjsk_assets = self.pjsk_assets()
 
         with patch(
             "astrbot_plugin_meme_forge.main.fetch_latest_compatible_meme_generator",
@@ -158,6 +180,7 @@ class UpdateCommandTests(unittest.IsolatedAsyncioTestCase):
             status=lambda: self.extension_status("v1.0.0"),
         )
         plugin.gouqi_extension = self.gouqi_extension(latest="f" * 40)
+        plugin.pjsk_assets = self.pjsk_assets()
 
         with patch(
             "astrbot_plugin_meme_forge.main.fetch_latest_compatible_meme_generator",

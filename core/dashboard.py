@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
+from . import pjsk, pjsk_catalog
 from .arguments import option_specs_from_params
 from .engine import MemeEngine, MemeEngineError
 from .extensions import MemeEmojiExtensionManager
@@ -34,9 +35,12 @@ from .maker import (
     caption_template_payload,
     decode_data_url,
 )
+from .pjsk_command import PjskArguments, PjskCommandError, coerce_options
 
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 _PLUGIN_VERSION: str | None = None
+#: Literal token the chat parser turns back into a line break.
+_LINE_BREAK_TOKEN = r"\n"
 
 
 def plugin_version() -> str:
@@ -81,11 +85,13 @@ class MemeDashboard:
         *,
         gouqi_extension: GouqiExtensionManager | None = None,
         maker_store: MakerStore | None = None,
+        pjsk_assets: Any | None = None,
     ) -> None:
         self.engine = engine
         self.extension = extension
         self.gouqi_extension = gouqi_extension
         self.maker_store = maker_store
+        self.pjsk_assets = pjsk_assets
         self.config = config
         self._preview_lock = asyncio.Lock()
 
@@ -242,6 +248,7 @@ class MemeDashboard:
         history: MemeUsageHistory,
         extension_status: Any,
         gouqi_status: Any | None = None,
+        pjsk_status: Any | None = None,
     ) -> dict[str, Any]:
         total = len(self.engine.memes)
         enabled = len(self.engine.available_memes())
@@ -291,6 +298,7 @@ class MemeDashboard:
                 "templates": int(getattr(gouqi_status, "templates", 0)),
             },
             "maker": self.maker_overview(),
+            "pjsk": self.pjsk_overview(pjsk_status),
         }
 
     def history(
@@ -686,3 +694,269 @@ class MemeDashboard:
             scratch.ensure_root()
             template = scratch.save(draft, base_data=base, overlay_data=overlay)
             return MakerMeme(template, scratch).generate_preview()
+    # ------------------------------------------------------------ PJSK 表情工坊
+
+    @property
+    def pjsk_enabled(self) -> bool:
+        if self.pjsk_assets is None:
+            return False
+        return bool(self._config_value("pjsk_enabled", True))
+
+    def _require_pjsk(self) -> Any:
+        if self.pjsk_assets is None or not self.pjsk_enabled:
+            raise DashboardError("PJSK 表情工坊未启用，请在插件配置中开启 pjsk_enabled。")
+        return self.pjsk_assets
+
+    def pjsk_output_scale(self) -> int:
+        try:
+            scale = int(self._config_value("pjsk_output_scale", 2))
+        except (TypeError, ValueError):
+            scale = 2
+        return max(1, min(pjsk.MAX_OUTPUT_SCALE, scale))
+
+    @staticmethod
+    def pjsk_limits() -> dict[str, Any]:
+        """Bounds the workbench sliders share with the chat argument parser."""
+        return {
+            "canvas": {
+                "width": pjsk_catalog.CANVAS_WIDTH,
+                "height": pjsk_catalog.CANVAS_HEIGHT,
+            },
+            "rotate": [-10, 10],
+            "font_size": [pjsk.MIN_FONT_SIZE, pjsk.MAX_FONT_SIZE],
+            "line_spacing": [pjsk.MIN_LINE_SPACING, pjsk.MAX_LINE_SPACING],
+            "scale": [1, pjsk.MAX_OUTPUT_SCALE],
+            "text_lines": pjsk.MAX_TEXT_LINES,
+            "text_length": pjsk.MAX_TEXT_LENGTH,
+        }
+
+    def pjsk_overview(self, status: Any | None = None) -> dict[str, Any]:
+        """Header block for the Page; the caller stats the artwork off-thread."""
+        return {
+            "enabled": self.pjsk_enabled,
+            "characters": len(pjsk_catalog.characters()),
+            "stickers": pjsk_catalog.IMAGE_COUNT,
+            "installed": bool(getattr(status, "installed", False)),
+            "ready": bool(getattr(status, "ready", False)),
+            "images": int(getattr(status, "images", 0) or 0),
+            "expected_images": pjsk_catalog.IMAGE_COUNT,
+        }
+
+    def _pjsk_status_payload(self, status: Any) -> dict[str, Any]:
+        manager = self.pjsk_assets
+        return {
+            "enabled": self.pjsk_enabled,
+            "installed": bool(getattr(status, "installed", False)),
+            "ready": bool(getattr(status, "ready", False)),
+            "verified": bool(getattr(status, "verified", False)),
+            "images": int(getattr(status, "images", 0) or 0),
+            "expected_images": pjsk_catalog.IMAGE_COUNT,
+            "image_bytes": int(getattr(status, "image_bytes", 0) or 0),
+            "expected_image_bytes": pjsk_catalog.IMAGE_BYTES,
+            "font_installed": bool(getattr(status, "font_installed", False)),
+            "font_bytes": int(getattr(manager, "FONT_BYTES", 0) or 0),
+            "installed_at": getattr(status, "installed_at", None),
+            "commit": getattr(status, "commit", None),
+            "font_commit": getattr(status, "font_commit", None),
+            "sticker_repository": getattr(manager, "STICKER_REPOSITORY", None),
+            "sticker_license": getattr(manager, "STICKER_LICENSE", None),
+            "font_repository": getattr(manager, "FONT_REPOSITORY", None),
+            "font_license": getattr(manager, "FONT_LICENSE", None),
+            "install_command": "/pjsk素材安装 确认",
+        }
+
+    async def pjsk_status(self) -> dict[str, Any]:
+        """Report artwork readiness plus the provenance shown in the Page."""
+        manager = self._require_pjsk()
+        try:
+            status = await asyncio.to_thread(manager.status)
+        except OSError as exc:
+            raise DashboardError(f"读取 PJSK 素材状态失败：{exc}") from exc
+        return {
+            "status": self._pjsk_status_payload(status),
+            "limits": self.pjsk_limits(),
+            "output_scale": self.pjsk_output_scale(),
+        }
+
+    def pjsk_catalog(self) -> dict[str, Any]:
+        """Full character and sticker index, so the picker filters locally."""
+        self._require_pjsk()
+        characters = [
+            {
+                "key": character.key,
+                "name": character.name_zh,
+                "display_name": character.display_name,
+                "color": character.color,
+                "aliases": list(character.aliases),
+                "first_index": character.first_index,
+                "last_index": character.last_index,
+                "count": character.count,
+                "range_label": character.range_label,
+            }
+            for character in pjsk_catalog.characters()
+        ]
+        items = [
+            {
+                "index": sticker.index,
+                "local_index": sticker.local_index,
+                "character": sticker.character.key,
+                "name": sticker.name,
+                "label": sticker.label,
+                "default_text": sticker.default_text,
+                "x": sticker.x,
+                "y": sticker.y,
+                "rotate": sticker.rotate,
+                "font_size": sticker.font_size,
+            }
+            for sticker in pjsk_catalog.stickers()
+        ]
+        return {
+            "characters": characters,
+            "items": items,
+            "total": len(items),
+            "limits": self.pjsk_limits(),
+            "output_scale": self.pjsk_output_scale(),
+        }
+
+    @staticmethod
+    def _pjsk_sticker(index: Any) -> Any:
+        """Resolve a 序号 or 角色+编号 token into exactly one sticker."""
+        text = str("" if index is None else index).strip()
+        if not text:
+            raise DashboardError("需要提供 PJSK 序号。")
+        selection = pjsk_catalog.parse_selector(text)
+        sticker = None if selection is None else selection.sticker
+        if sticker is None:
+            raise DashboardError(f"没有找到 PJSK 序号「{text}」。")
+        return sticker
+
+    @staticmethod
+    def _pjsk_read(path: Path) -> bytes:
+        if not path.is_file():
+            raise DashboardError(
+                "PJSK 素材还没安装，请管理员先执行 /pjsk素材安装 确认。"
+            )
+        return path.read_bytes()
+
+    async def pjsk_sticker(self, index: Any) -> dict[str, Any]:
+        """Return one untouched base artwork for the workbench preview."""
+        manager = self._require_pjsk()
+        sticker = self._pjsk_sticker(index)
+        path = manager.image_path(sticker.image)
+        try:
+            data = await asyncio.to_thread(self._pjsk_read, path)
+        except OSError as exc:
+            raise DashboardError(f"读取 PJSK 底图失败：{exc}") from exc
+        if len(data) > self.max_preview_bytes:
+            raise DashboardError(
+                f"底图超过 {self.max_preview_bytes // 1024 // 1024} MB 限制。"
+            )
+        media_type = self._guess_media_type(data)
+        return {
+            "index": sticker.index,
+            "label": sticker.label,
+            "media_type": media_type,
+            "data_url": self._data_url(data, media_type),
+        }
+
+    @staticmethod
+    def _pjsk_command(sticker: Any, text: str, options: PjskArguments) -> str:
+        """Chat command that reproduces the draft, offered for copying."""
+        parts = ["/pjsk", str(sticker.index)]
+        caption = pjsk.normalise_text(text)
+        if caption:
+            parts.append(caption.replace("\n", _LINE_BREAK_TOKEN))
+        pairs = (
+            ("-x", options.x),
+            ("-y", options.y),
+            ("-r", options.rotate),
+            ("-s", options.font_size),
+            ("-l", options.line_spacing),
+        )
+        for flag, value in pairs:
+            if value is not None:
+                parts.append(f"{flag} {value:g}")
+        if options.curve:
+            parts.append("-c")
+        if options.scale is not None:
+            parts.append(f"--scale {options.scale}")
+        return " ".join(parts)
+
+    @staticmethod
+    def _render_pjsk_draft(
+        sticker: Any,
+        text: str,
+        image_path: Path,
+        font_path: Path,
+        options: dict[str, Any],
+    ) -> tuple[bytes, dict[str, Any]]:
+        """Render one draft and report the geometry that was actually used."""
+        if not image_path.is_file():
+            raise DashboardError(
+                "PJSK 素材还没安装，请管理员先执行 /pjsk素材安装 确认。"
+            )
+        geometry = {key: value for key, value in options.items() if key != "scale"}
+        layout = pjsk.resolve_layout(sticker, text, font_path=font_path, **geometry)
+        image = pjsk.render_sticker(
+            sticker,
+            text,
+            image_path=image_path,
+            font_path=font_path,
+            **options,
+        )
+        return image, {
+            "lines": list(layout.lines),
+            "x": round(layout.x, 2),
+            "y": round(layout.y, 2),
+            "rotate": round(layout.rotate, 2),
+            "font_size": layout.font_size,
+            "line_spacing": round(layout.line_spacing, 2),
+            "curve": layout.curve,
+        }
+
+    async def pjsk_render(self, payload: Any) -> dict[str, Any]:
+        """Render one workbench draft without sending it to a chat."""
+        manager = self._require_pjsk()
+        source = dict(payload or {})
+        sticker = self._pjsk_sticker(source.get("index"))
+        try:
+            options = coerce_options(source)
+        except PjskCommandError as exc:
+            raise DashboardError(str(exc)) from exc
+        render_options = options.render_options()
+        if render_options.get("scale") is None:
+            render_options["scale"] = self.pjsk_output_scale()
+        text = str(source.get("text") or "")
+        try:
+            async with self._preview_lock:
+                image, layout = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._render_pjsk_draft,
+                        sticker,
+                        text,
+                        manager.image_path(sticker.image),
+                        manager.font_path,
+                        render_options,
+                    ),
+                    timeout=30,
+                )
+        except ImageRenderError as exc:
+            raise DashboardError(f"预览渲染失败：{exc}") from exc
+        except asyncio.TimeoutError as exc:
+            raise DashboardError("预览渲染超时，请减少文字或降低输出倍数。") from exc
+        except OSError as exc:
+            raise DashboardError(f"预览渲染失败：{exc}") from exc
+        if len(image) > self.max_preview_bytes:
+            raise DashboardError(
+                f"预览图片超过 {self.max_preview_bytes // 1024 // 1024} MB 限制。"
+            )
+        media_type = self._guess_media_type(image)
+        return {
+            "index": sticker.index,
+            "label": sticker.label,
+            "character": sticker.character.key,
+            "layout": layout,
+            "command": self._pjsk_command(sticker, text, options),
+            "media_type": media_type,
+            "data_url": self._data_url(image, media_type),
+        }

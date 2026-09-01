@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from contextlib import suppress
+from types import SimpleNamespace
 from typing import Any
 
 import aiohttp
@@ -14,6 +16,7 @@ from astrbot.core.star import StarTools
 from astrbot.core.star.filter.event_message_type import EventMessageType
 from quart import jsonify, request
 
+from .core import pjsk, pjsk_catalog
 from .core.arguments import strip_trigger_prefix
 from .core.collector import InputCollectionError, ParamsCollector
 from .core.dashboard import DashboardError, MemeDashboard
@@ -37,6 +40,16 @@ from .core.maker import (
     caption_template_payload,
     image_canvas_size,
 )
+from .core.pjsk_assets import PjskAssetError, PjskAssetManager
+from .core.pjsk_command import (
+    HELP_TOKENS,
+    RANDOM_TOKENS,
+    SHEET_TOKENS,
+    PjskCommandError,
+    parse_arguments,
+    resolve_target,
+    usage_lines,
+)
 from .core.updates import (
     SUPPORTED_RANGE_TEXT,
     compare_engine_versions,
@@ -50,6 +63,9 @@ OUTPUT_INDEX_KV_KEY = "generated_meme_outputs_v1"
 FAVORITES_KV_PREFIX = "meme_favorites_v1"
 USAGE_HISTORY_KV_KEY = "meme_usage_history_v1"
 DASHBOARD_BULK_LIMIT = 200
+PJSK_KEY_PREFIX = "pjsk:"
+PJSK_ALL_TOKENS = frozenset({"全部", "全部表情", "全图", "所有", "all"})
+PJSK_SHEET_CACHE = 6
 
 
 class GenerationBusyError(RuntimeError):
@@ -78,12 +94,14 @@ class MemeForgePlugin(Star):
         )
         self.gouqi_extension = GouqiExtensionManager(data_dir, config)
         self.maker_store = MakerStore(data_dir / "maker")
+        self.pjsk_assets = PjskAssetManager(data_dir, config)
         self.dashboard = MemeDashboard(
             self.engine,
             self.extension,
             config,
             gouqi_extension=self.gouqi_extension,
             maker_store=self.maker_store,
+            pjsk_assets=self.pjsk_assets,
         )
         parallel = max(1, int(self._config_value("max_parallel_generations", 2)))
         self._generation_slots = asyncio.Semaphore(parallel)
@@ -95,6 +113,7 @@ class MemeForgePlugin(Star):
         )
         self._storage_lock = asyncio.Lock()
         self._config_lock = asyncio.Lock()
+        self._pjsk_sheets: dict[str, bytes] = {}
         self._register_dashboard_apis()
 
     def _config_value(self, key: str, default: Any) -> Any:
@@ -161,6 +180,30 @@ class MemeForgePlugin(Star):
                 ["POST"],
                 "Meme 工坊自制模板删除",
             ),
+            (
+                "dashboard/pjsk/status",
+                self.dashboard_pjsk_status,
+                ["GET"],
+                "Meme 工坊 PJSK 素材状态",
+            ),
+            (
+                "dashboard/pjsk/characters",
+                self.dashboard_pjsk_characters,
+                ["GET"],
+                "Meme 工坊 PJSK 角色目录",
+            ),
+            (
+                "dashboard/pjsk/sticker",
+                self.dashboard_pjsk_sticker,
+                ["GET"],
+                "Meme 工坊 PJSK 底图预览",
+            ),
+            (
+                "dashboard/pjsk/render",
+                self.dashboard_pjsk_render,
+                ["POST"],
+                "Meme 工坊 PJSK 表情渲染",
+            ),
         ]
         for suffix, handler, methods, description in apis:
             self.context.register_web_api(
@@ -181,6 +224,10 @@ class MemeForgePlugin(Star):
                 asyncio.to_thread(self.extension.status),
                 asyncio.to_thread(self.gouqi_extension.status),
             )
+            pjsk_status = None
+            if self._pjsk_enabled:
+                with suppress(OSError, PjskAssetError):
+                    pjsk_status = await self._pjsk_status()
             return jsonify(
                 {
                     "ok": True,
@@ -188,6 +235,7 @@ class MemeForgePlugin(Star):
                         self._usage_history,
                         extension_status,
                         gouqi_status,
+                        pjsk_status,
                     ),
                 }
             )
@@ -370,6 +418,36 @@ class MemeForgePlugin(Star):
         loaded = await self._refresh_maker_memes(reload_engine=True)
         return jsonify({"ok": True, **result, "loaded": loaded})
 
+    async def dashboard_pjsk_status(self):
+        """Report whether the optional PJSK artwork pack is installed."""
+        try:
+            return jsonify({"ok": True, **await self.dashboard.pjsk_status()})
+        except DashboardError as exc:
+            return self._dashboard_error(str(exc))
+
+    async def dashboard_pjsk_characters(self):
+        """Return the PJSK character catalogue used by the workbench picker."""
+        try:
+            return jsonify({"ok": True, **self.dashboard.pjsk_catalog()})
+        except DashboardError as exc:
+            return self._dashboard_error(str(exc))
+
+    async def dashboard_pjsk_sticker(self):
+        """Return one PJSK base artwork as a data URL."""
+        try:
+            index = request.args.get("index", "")
+            return jsonify({"ok": True, **await self.dashboard.pjsk_sticker(index)})
+        except DashboardError as exc:
+            return self._dashboard_error(str(exc), 404)
+
+    async def dashboard_pjsk_render(self):
+        """Render one PJSK sticker for the workbench without sending it."""
+        payload = await request.get_json(silent=True) or {}
+        try:
+            return jsonify({"ok": True, **await self.dashboard.pjsk_render(payload)})
+        except DashboardError as exc:
+            return self._dashboard_error(str(exc))
+
     def _disabled_keys(self) -> list[str]:
         return [str(value) for value in (self._config_value("disabled_memes", []) or [])]
 
@@ -489,6 +567,53 @@ class MemeForgePlugin(Star):
             return f"/{trigger}"
         separator = " " if prefix[-1].isalnum() else ""
         return f"/{prefix}{separator}{trigger}"
+
+    @staticmethod
+    def _pjsk_favorite_index(key: str) -> int | None:
+        """Return the PJSK 序号 stored in a favorite key, if it is a PJSK one."""
+        text = str(key or "")
+        if not text.startswith(PJSK_KEY_PREFIX):
+            return None
+        try:
+            return int(text[len(PJSK_KEY_PREFIX) :])
+        except ValueError:
+            return None
+
+    def _favorite_label(self, entry: FavoriteEntry) -> tuple[str, str]:
+        """Return the display trigger and a status suffix for one favorite."""
+        index = self._pjsk_favorite_index(entry.key)
+        if index is not None:
+            sticker = pjsk_catalog.sticker_by_index(index)
+            if sticker is None:
+                return entry.trigger, "，序号已失效"
+            return f"{sticker.character.display_name} {sticker.number}", ""
+        meme = self.engine.resolve(entry.key)
+        if meme is None:
+            return entry.trigger, "，当前未加载"
+        if self.engine.resolve(entry.trigger) is not meme:
+            return self._preferred_trigger(meme), ""
+        return entry.trigger, ""
+
+    def _favorite_command(self, key: str, trigger: str) -> str:
+        """Return the command that reproduces one favorite."""
+        index = self._pjsk_favorite_index(key)
+        if index is not None:
+            return f"/pjsk {index} 你的文字"
+        return self._format_trigger_command(trigger)
+
+    @staticmethod
+    def _pjsk_unfavorite_key(keyword: str) -> str | None:
+        """Return the favorite key matching a PJSK selector such as 「pjsk 206」."""
+        text = str(keyword or "").strip()
+        if text[:4].casefold() == "pjsk":
+            text = text[4:]
+        text = text.lstrip(": ：").strip()
+        if not text:
+            return None
+        selection = pjsk_catalog.parse_selector(text)
+        if selection is None or selection.sticker is None:
+            return None
+        return f"{PJSK_KEY_PREFIX}{selection.sticker.index}"
 
     @staticmethod
     def _favorite_storage_key(event: AstrMessageEvent) -> str:
@@ -668,6 +793,7 @@ class MemeForgePlugin(Star):
             await self.grabber.cleanup_expired()
         except OSError as exc:
             logger.warning("[meme_forge] 清理过期提取文件失败: %s", exc)
+        await self._log_pjsk_state()
         if self._config_value("check_resources_on_start", False):
             self._resource_task = asyncio.create_task(self._background_resource_check())
 
@@ -681,6 +807,29 @@ class MemeForgePlugin(Star):
             raise
         except (MemeEngineError, OSError) as exc:
             logger.warning("[meme_forge] 启动资源检查失败: %s", exc)
+
+    async def _log_pjsk_state(self) -> None:
+        """Log whether the optional PJSK artwork pack is ready to use."""
+        if not self._pjsk_enabled:
+            logger.info("[meme_forge] PJSK 表情工坊已在配置中关闭")
+            return
+        try:
+            status = await asyncio.to_thread(self.pjsk_assets.status)
+        except OSError as exc:
+            logger.warning("[meme_forge] 读取 PJSK 素材状态失败: %s", exc)
+            return
+        if status.ready:
+            logger.info(
+                "[meme_forge] PJSK 素材已就绪：%d 张底图 / %d 个角色",
+                status.images,
+                len(pjsk_catalog.characters()),
+            )
+            return
+        logger.info(
+            "[meme_forge] PJSK 素材未安装（底图 %d/%d），管理员可执行 /pjsk素材安装 确认",
+            status.images,
+            status.expected_images,
+        )
 
     @filter.command(
         "meme工坊帮助",
@@ -997,6 +1146,30 @@ class MemeForgePlugin(Star):
             lines.append("- 提示：上游有未审阅改动，需等待 Meme 工坊适配后更新。")
         lines.append("- 许可：上游暂未声明开源许可证，不会打包进本插件。")
 
+        pjsk_status: Any | None = None
+        lines.extend(["", "PJSK 表情素材（可选）："])
+        try:
+            pjsk_status = await self._pjsk_status()
+        except OSError as exc:
+            logger.warning("[meme_forge] 读取 PJSK 素材状态失败: %s", exc)
+            lines.append("- 状态：读取失败")
+        else:
+            if pjsk_status.ready:
+                pjsk_state = "已安装，清单校验通过"
+            elif pjsk_status.installed:
+                pjsk_state = "已安装，但底图或字体不完整"
+            else:
+                pjsk_state = "尚未安装"
+            lines.extend(
+                [
+                    f"- 底图：{pjsk_status.images}/{pjsk_status.expected_images}",
+                    f"- 状态：{pjsk_state}",
+                    f"- 已审阅底图：{self.pjsk_assets.STICKER_COMMIT[:12]}（MIT）",
+                    f"- 已审阅字体：{self.pjsk_assets.FONT_COMMIT[:12]}（MIT）",
+                    "- 素材按需下载到数据目录，不随插件更新。",
+                ]
+            )
+
         lines.extend(
             [
                 "",
@@ -1021,6 +1194,8 @@ class MemeForgePlugin(Star):
             )
         ):
             lines.append("Gouqi 扩展可执行 /meme工坊Gouqi扩展安装 确认。")
+        if pjsk_status is not None and not pjsk_status.ready:
+            lines.append("PJSK 素材可执行 /pjsk素材安装 确认。")
         yield event.plain_result("\n".join(lines))
 
     @filter.command("meme工坊扩展安装", alias={"meme工坊扩展更新"})
@@ -1364,16 +1539,10 @@ class MemeForgePlugin(Star):
 
         lines = [f"你的 Meme 收藏（{len(favorites)} 个）："]
         for index, entry in enumerate(favorites, start=1):
-            meme = self.engine.resolve(entry.key)
-            trigger = entry.trigger
-            status = ""
-            if meme is None:
-                status = "，当前未加载"
-            elif self.engine.resolve(trigger) is not meme:
-                trigger = self._preferred_trigger(meme)
+            trigger, status = self._favorite_label(entry)
             lines.append(
                 f"{index}. {trigger}（key: {entry.key}{status}）"
-                f"\n   命令：{self._format_trigger_command(trigger)}"
+                f"\n   命令：{self._favorite_command(entry.key, trigger)}"
             )
         lines.append("使用 /meme取消收藏 <触发词> 可移除收藏。")
         yield event.plain_result("\n".join(lines))
@@ -1405,6 +1574,8 @@ class MemeForgePlugin(Star):
                         ),
                         None,
                     )
+                if key is None:
+                    key = self._pjsk_unfavorite_key(keyword)
                 if key is None:
                     result_message = f"没有找到 meme：{keyword}"
                 else:
@@ -1547,6 +1718,374 @@ class MemeForgePlugin(Star):
             )
         yield event.plain_result("\n".join(lines))
 
+    # --------------------------------------------------------------- PJSK 表情
+
+    @property
+    def _pjsk_enabled(self) -> bool:
+        return bool(self._config_value("pjsk_enabled", True))
+
+    def _pjsk_output_scale(self) -> int:
+        """Return the configured output multiplier, clamped to a sane range."""
+        try:
+            scale = int(self._config_value("pjsk_output_scale", 2))
+        except (TypeError, ValueError):
+            scale = 2
+        return max(1, min(pjsk.MAX_OUTPUT_SCALE, scale))
+
+    async def _pjsk_status(self) -> Any:
+        """Stat the installed PJSK assets off the event loop."""
+        return await asyncio.to_thread(self.pjsk_assets.status)
+
+    async def _pjsk_block_reason(self) -> str | None:
+        """Return a user-facing reason when PJSK stickers cannot be rendered."""
+        if not self._pjsk_enabled:
+            return "PJSK 表情工坊已关闭，请在插件配置里打开 pjsk_enabled。"
+        try:
+            status = await self._pjsk_status()
+        except OSError as exc:
+            return f"读取 PJSK 素材失败：{exc}"
+        if status.ready:
+            return None
+        font_state = "已就绪" if status.font_installed else "缺失"
+        return (
+            f"PJSK 素材还没装好（底图 {status.images}/{status.expected_images}，"
+            f"字体{font_state}）。\n"
+            "请管理员执行 /pjsk素材安装 确认，首次安装需联网下载约 30 MB。"
+        )
+
+    async def _pjsk_sheet(
+        self,
+        character: Any | None = None,
+        *,
+        everything: bool = False,
+    ) -> bytes:
+        """Render one contact sheet, caching everything except the full grid."""
+        images_root = self.pjsk_assets.images_root
+        if everything:
+            return await asyncio.to_thread(pjsk.render_all_stickers_sheet, images_root)
+        cache_key = "characters" if character is None else f"char:{character.key}"
+        cached = self._pjsk_sheets.get(cache_key)
+        if cached is not None:
+            return cached
+        if character is None:
+            image = await asyncio.to_thread(pjsk.render_character_sheet, images_root)
+        else:
+            image = await asyncio.to_thread(
+                pjsk.render_character_stickers_sheet,
+                images_root,
+                character,
+            )
+        while len(self._pjsk_sheets) >= PJSK_SHEET_CACHE:
+            self._pjsk_sheets.pop(next(iter(self._pjsk_sheets)))
+        self._pjsk_sheets[cache_key] = image
+        return image
+
+    async def _pjsk_sheet_for(self, token: str) -> tuple[bytes | None, str | None]:
+        """Pick the contact sheet matching one optional selector token."""
+        text = str(token or "").strip()
+        try:
+            if not text:
+                return await self._pjsk_sheet(), None
+            if text in PJSK_ALL_TOKENS:
+                return await self._pjsk_sheet(everything=True), None
+            selection = pjsk_catalog.parse_selector(text)
+            if selection is None:
+                return None, (
+                    f"认不出「{text}」。直接发送 /pjsk表情 看角色总览，"
+                    "或者带上角色名，例如 /pjsk表情 未来。"
+                )
+            return await self._pjsk_sheet(selection.character), None
+        except (PjskAssetError, OSError) as exc:
+            logger.warning("[meme_forge] PJSK 总览图读取素材失败: %s", exc)
+            return None, "PJSK 素材读取失败，请管理员执行 /pjsk素材安装 确认。"
+        except Exception:  # noqa: BLE001 - Pillow surfaces many unrelated errors
+            logger.exception("[meme_forge] PJSK 总览图渲染异常")
+            return None, "PJSK 总览图生成失败，请查看 AstrBot 日志。"
+
+    async def _render_pjsk(
+        self,
+        sticker: Any,
+        text: str,
+        options: dict[str, Any],
+    ) -> bytes:
+        """Render one sticker under the shared concurrency and timeout limits."""
+        settings = dict(options)
+        if not settings.get("scale"):
+            settings["scale"] = self._pjsk_output_scale()
+        timeout = float(self._config_value("generation_timeout", 30))
+        try:
+            await asyncio.wait_for(
+                self._generation_slots.acquire(),
+                min(10.0, timeout),
+            )
+        except asyncio.TimeoutError as exc:
+            raise GenerationBusyError from exc
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    pjsk.render_sticker,
+                    sticker,
+                    text,
+                    image_path=pjsk.sticker_path(
+                        self.pjsk_assets.images_root,
+                        sticker,
+                    ),
+                    font_path=self.pjsk_assets.font_path,
+                    **settings,
+                ),
+                timeout=timeout,
+            )
+        finally:
+            self._generation_slots.release()
+
+    async def _deliver_pjsk(
+        self,
+        event: AstrMessageEvent,
+        sticker: Any,
+        image: bytes,
+    ) -> None:
+        """Feed one rendered sticker into 收藏 / 最近 / 使用记录。"""
+        record = SimpleNamespace(key=f"{PJSK_KEY_PREFIX}{sticker.index}")
+        trigger = f"pjsk {sticker.index}"
+        self._remember_meme(event, record, trigger)
+        await self._remember_generated_output(
+            event,
+            record,
+            image,
+            trigger,
+            track_usage=True,
+        )
+
+    async def _pjsk_emit(
+        self,
+        event: AstrMessageEvent,
+        sticker: Any,
+        text: str,
+        options: dict[str, Any],
+    ) -> tuple[bytes | None, str | None]:
+        """Render and remember one sticker, or return a user-facing error."""
+        try:
+            image = await self._render_pjsk(sticker, text, options)
+        except GenerationBusyError:
+            return None, "当前生成任务较多，请稍后再试。"
+        except asyncio.TimeoutError:
+            logger.warning("[meme_forge] PJSK 渲染 %s 超时", sticker.name)
+            return None, "PJSK 表情生成超时。"
+        except (PjskAssetError, OSError) as exc:
+            logger.warning("[meme_forge] PJSK 素材缺失: %s", exc)
+            return None, "PJSK 素材不完整，请管理员执行 /pjsk素材安装 确认。"
+        except ValueError as exc:
+            return None, str(exc)
+        except Exception:  # noqa: BLE001 - Pillow surfaces many unrelated errors
+            logger.exception("[meme_forge] PJSK 渲染 %s 异常", sticker.name)
+            return None, "PJSK 表情生成失败，请查看 AstrBot 日志。"
+        await self._deliver_pjsk(event, sticker, image)
+        return image, None
+
+    async def _pjsk_random_reply(
+        self,
+        event: AstrMessageEvent,
+        args: tuple[str, ...],
+    ) -> tuple[list[Any] | None, str | None]:
+        """Build the reply chain for one random sticker, or an error message."""
+        try:
+            arguments = parse_arguments(args)
+        except PjskCommandError as exc:
+            return None, str(exc)
+        catalogue = pjsk_catalog.stickers()
+        if not catalogue:
+            return None, "PJSK 目录为空，请重新安装素材。"
+        sticker = random.choice(catalogue)
+        image, error = await self._pjsk_emit(
+            event,
+            sticker,
+            " ".join(arguments.words),
+            arguments.render_options(),
+        )
+        if error is not None:
+            return None, error
+        return [
+            Comp.Plain(f"{sticker.label}（/pjsk {sticker.index}）\n"),
+            Comp.Image.fromBytes(image),
+        ], None
+
+    @filter.command(
+        "pjsk表情",
+        alias={"pjsk列表", "pjsk菜单", "pjsk角色", "PJSK表情", "PJSK列表"},
+    )
+    async def pjsk_sheet_command(
+        self,
+        event: AstrMessageEvent,
+        selector: str | None = None,
+    ):
+        """看图选序号：角色总览、单角色全姿势或全部底图。"""
+        event.stop_event()
+        reason = await self._pjsk_block_reason()
+        if reason is not None:
+            yield event.plain_result(reason)
+            return
+        image, error = await self._pjsk_sheet_for(selector or "")
+        if error is not None or image is None:
+            yield event.plain_result(error or "PJSK 总览图生成失败。")
+            return
+        yield event.chain_result([Comp.Image.fromBytes(image)])
+
+    @filter.command("pjsk", alias={"PJSK", "pjsk制作", "pjsk贴纸"})
+    async def pjsk_sticker_command(
+        self,
+        event: AstrMessageEvent,
+        selector: str | None = None,
+        *args: str,
+    ):
+        """按序号或角色名生成一张 PJSK 手写体表情包。"""
+        event.stop_event()
+        token = str(selector or "").strip()
+        if not token or token in HELP_TOKENS:
+            yield event.plain_result("\n".join(usage_lines()))
+            return
+        reason = await self._pjsk_block_reason()
+        if reason is not None:
+            yield event.plain_result(reason)
+            return
+        if token in SHEET_TOKENS:
+            image, error = await self._pjsk_sheet_for(" ".join(args).strip())
+            if error is not None or image is None:
+                yield event.plain_result(error or "PJSK 总览图生成失败。")
+                return
+            yield event.chain_result([Comp.Image.fromBytes(image)])
+            return
+        if token in RANDOM_TOKENS:
+            chain, error = await self._pjsk_random_reply(event, args)
+            if error is not None or chain is None:
+                yield event.plain_result(error or "PJSK 表情生成失败。")
+                return
+            yield event.chain_result(chain)
+            return
+        try:
+            arguments = parse_arguments((token, *args))
+            target = resolve_target(arguments.words)
+        except PjskCommandError as exc:
+            yield event.plain_result(str(exc))
+            return
+        sticker = target.sticker
+        if sticker is None:
+            if target.character is None:
+                yield event.plain_result("\n".join(usage_lines()))
+                return
+            sticker = random.choice(
+                pjsk_catalog.character_stickers(target.character)
+            )
+        image, error = await self._pjsk_emit(
+            event,
+            sticker,
+            target.text,
+            arguments.render_options(),
+        )
+        if error is not None or image is None:
+            yield event.plain_result(error or "PJSK 表情生成失败。")
+            return
+        yield event.chain_result([Comp.Image.fromBytes(image)])
+
+    @filter.command("pjsk随机", alias={"随机pjsk", "PJSK随机", "pjsk抽一张"})
+    async def pjsk_random_command(self, event: AstrMessageEvent, *args: str):
+        """从 359 张底图里随机抽一张并配上文字。"""
+        event.stop_event()
+        reason = await self._pjsk_block_reason()
+        if reason is not None:
+            yield event.plain_result(reason)
+            return
+        chain, error = await self._pjsk_random_reply(event, args)
+        if error is not None or chain is None:
+            yield event.plain_result(error or "PJSK 表情生成失败。")
+            return
+        yield event.chain_result(chain)
+
+    @filter.command("pjsk帮助", alias={"pjsk用法", "PJSK帮助", "pjsk说明"})
+    async def pjsk_help_command(self, event: AstrMessageEvent):
+        """PJSK 表情工坊的完整用法。"""
+        event.stop_event()
+        yield event.plain_result("\n".join(usage_lines()))
+
+    @filter.command("pjsk素材安装", alias={"pjsk素材更新", "PJSK素材安装"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def install_pjsk_assets(
+        self,
+        event: AstrMessageEvent,
+        confirmation: str | None = None,
+    ):
+        """下载 PJSK 底图与手写字体（两者均为 MIT 许可）。"""
+        event.stop_event()
+        if confirmation != "确认":
+            yield event.plain_result(
+                "PJSK 底图来自 TheOriginalAyaka/sekai-stickers，手写字体来自 "
+                "Agnes4m/nonebot_plugin_pjsk，两者均为 MIT 许可；角色形象版权仍归 "
+                "SEGA / Colorful Palette，请只在同人二创允许的范围内使用。\n"
+                "安装会下载约 30 MB 素材到插件数据目录，不随插件更新。\n"
+                "请使用 /pjsk素材安装 确认 继续。"
+            )
+            return
+        yield event.plain_result("开始下载并逐个校验 PJSK 素材，大约需要一两分钟。")
+        try:
+            status = await self.pjsk_assets.install()
+        except (
+            PjskAssetError,
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            OSError,
+        ) as exc:
+            yield event.plain_result(f"PJSK 素材安装失败：{exc}")
+            return
+        self._pjsk_sheets.clear()
+        pjsk.clear_font_cache()
+        font_state = "已就绪" if status.font_installed else "缺失"
+        if not status.ready:
+            yield event.plain_result(
+                f"PJSK 素材安装未完成：底图 {status.images}/{status.expected_images}，"
+                f"字体{font_state}。请查看 AstrBot 日志后重试。"
+            )
+            return
+        if not self._pjsk_enabled:
+            yield event.plain_result(
+                f"PJSK 素材已安装（{status.images} 张底图）；"
+                "当前 pjsk_enabled 为关闭状态，开启配置后即可使用。"
+            )
+            return
+        yield event.plain_result(
+            f"PJSK 素材已就绪：{status.images} 张底图 + 手写字体。\n"
+            "先发送 /pjsk表情 看角色总览，再用 /pjsk 序号 文字 出图。"
+        )
+
+    @filter.command("pjsk素材状态", alias={"PJSK素材状态", "pjsk状态"})
+    async def pjsk_assets_status(self, event: AstrMessageEvent):
+        """查看 PJSK 素材的安装与校验情况。"""
+        event.stop_event()
+        try:
+            status = await self._pjsk_status()
+        except OSError as exc:
+            yield event.plain_result(f"读取 PJSK 素材失败：{exc}")
+            return
+        toggle = "已开启" if self._pjsk_enabled else "已关闭"
+        usable = "可用" if status.ready else "不可用"
+        font_state = "已就绪" if status.font_installed else "缺失"
+        verified = "通过" if status.verified else "未校验"
+        megabytes = status.image_bytes / 1024 / 1024
+        lines = [
+            f"PJSK 表情工坊：{toggle}，当前{usable}",
+            f"底图：{status.images}/{status.expected_images}（{megabytes:.1f} MB）",
+            f"字体：{font_state}",
+            f"清单校验：{verified}",
+            f"输出倍数：{self._pjsk_output_scale()}×（单张 296×256）",
+        ]
+        if status.commit:
+            lines.append(f"底图版本：{status.commit[:12]}（MIT）")
+        if status.font_commit:
+            lines.append(f"字体版本：{status.font_commit[:12]}（MIT）")
+        if status.installed_at:
+            lines.append(f"安装时间：{status.installed_at}")
+        if not status.ready:
+            lines.append("管理员可执行 /pjsk素材安装 确认 下载素材（约 30 MB）。")
+        yield event.plain_result("\n".join(lines))
+
     @filter.event_message_type(EventMessageType.ALL)
     async def meme_handle(self, event: AstrMessageEvent):
         """匹配触发词并生成 meme。"""
@@ -1619,6 +2158,7 @@ class MemeForgePlugin(Star):
         await self.collector.close()
         await self.extension.close()
         await self.gouqi_extension.close()
+        await self.pjsk_assets.close()
         try:
             await self.grabber.cleanup_all()
         except OSError as exc:
