@@ -56,9 +56,9 @@ class PjskAssetStatus:
 class PjskAssetManager:
     """Install the sticker artwork and handwriting font on demand."""
 
-    STICKER_REPOSITORY = "https://github.com/TheOriginalAyaka/sekai-stickers"
+    STICKER_REPOSITORY = catalog.SOURCE_REPOSITORY
     STICKER_COMMIT = catalog.SOURCE_COMMIT
-    STICKER_LICENSE = "MIT"
+    STICKER_LICENSE = catalog.SOURCE_LICENSE
     FONT_REPOSITORY = "https://github.com/Agnes4m/nonebot_plugin_pjsk"
     FONT_COMMIT = "9d310136c199e156efc27dfbebebc1f7e72f16bc"
     FONT_LICENSE = "MIT"
@@ -68,11 +68,11 @@ class PjskAssetManager:
     FONT_SHA256 = "433002bcfede16330146912e43eef4696bfda71b9d29f9cd2297bfea5e04b212"
 
     USER_AGENT = "astrbot-plugin-meme-forge/pjsk-assets"
-    MAX_STICKER_ARCHIVE_BYTES = 48 * 1024 * 1024
+    MAX_STICKER_ARCHIVE_BYTES = 96 * 1024 * 1024
     MAX_FONT_ARCHIVE_BYTES = 12 * 1024 * 1024
     MAX_ARCHIVE_MEMBERS = 4_000
     MAX_IMAGE_BYTES = 256 * 1024
-    REQUIRED_FREE_BYTES = 96 * 1024 * 1024
+    REQUIRED_FREE_BYTES = 256 * 1024 * 1024
     PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
     def __init__(self, data_dir: Path, config: Any):
@@ -99,7 +99,7 @@ class PjskAssetManager:
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             timeout_seconds = max(
-                120, int(self._config_value("pjsk_download_timeout", 900))
+                120, int(self._config_value("pjsk_download_timeout", 1800))
             )
             self._session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(
@@ -373,7 +373,7 @@ class PjskAssetManager:
 
             self.root.mkdir(parents=True, exist_ok=True)
             if shutil.disk_usage(self.root).free < self.REQUIRED_FREE_BYTES:
-                raise PjskAssetError("磁盘空间不足，PJSK 素材至少需要 96 MB 可用空间")
+                raise PjskAssetError("磁盘空间不足，PJSK 素材至少需要 256 MB 可用空间")
 
             archive_fd, archive_name = tempfile.mkstemp(
                 prefix="pjsk-stickers-", suffix=".tar.gz.part", dir=self.root

@@ -74,15 +74,19 @@ GitHub 仓库公开可见不代表授予复制、修改、分发或素材使用�
 
 ## sekai-stickers
 
-- Project: https://github.com/TheOriginalAyaka/sekai-stickers
-- Author: TheOriginalAyaka and contributors
+- Project: https://github.com/laffylaffyla/sekai-stickers
+- Upstream project: https://github.com/TheOriginalAyaka/sekai-stickers（已归档）
+- Authors: TheOriginalAyaka, laffylaffyla and contributors
 - License: MIT License
-- Reviewed commit: `49189d2e63ed715df5de053261f3bc09d9e817f2`
+- Reviewed commit: `6668a26d37aec08a25674a4f3ad3f886ab9b2af2`
+- Previously reviewed commit（v1.10.4 及更早）: `49189d2e63ed715df5de053261f3bc09d9e817f2`（TheOriginalAyaka 原仓库）
 
-可选 PJSK 表情工坊的 359 张贴纸底图，以及每张图的默认文字位置、角度和字号，来自该仓库的
-`public/img` 与角色定义数据。Meme 工坊不打包这些文件；管理员执行 `/sk素材安装 确认` 后，
+可选 PJSK 表情工坊的 787 张贴纸底图，以及每张图的默认文字位置、角度和字号，来自该仓库的
+`public/img` 与角色定义数据。原仓库 `TheOriginalAyaka/sekai-stickers` 已归档停更，
+`laffylaffyla/sekai-stickers` 是它仍在维护的 MIT 分支，素材更全，因此 v1.10.5 起改用后者。
+Meme 工坊不打包这些文件；管理员执行 `/sk素材安装 确认` 后，
 安装器只从上述固定提交下载清单内的文件，并逐项校验相对路径、字节数和 Git blob 哈希
-（底图合计 22,374,334 字节）。
+（底图合计 55,912,834 字节）。
 
 MIT 许可覆盖该仓库的代码与文件组织。贴纸中的角色形象出自 SEGA / Colorful Palette /
 Crypton Future Media 的《プロジェクトセカイ カラフルステージ！ feat. 初音ミク》，相关版权归

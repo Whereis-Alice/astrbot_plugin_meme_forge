@@ -10,6 +10,7 @@ from unittest import mock
 
 from PIL import Image
 
+from astrbot_plugin_meme_forge.core import pjsk_catalog
 from astrbot_plugin_meme_forge.core.imaging import (
     has_transparency,
     to_delivery_bytes,
@@ -168,7 +169,7 @@ class PluginDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.plugin._remember_generated_output = remember
         image, error = await self.plugin._pjsk_emit(
             None,
-            SimpleNamespace(index=1, name="miku_01"),
+            pjsk_catalog.sticker_by_index(449),
             "哟",
             {},
         )

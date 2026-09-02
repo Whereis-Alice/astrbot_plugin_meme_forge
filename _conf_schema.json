@@ -236,14 +236,14 @@
   },
   "pjsk_download_timeout": {
     "description": "PJSK 素材下载超时（秒）",
-    "hint": "首次安装需从两个 MIT 源仓库下载约 30 MB（359 张底图 + 手写字体），网络较慢时可调大。重载插件后生效。",
+    "hint": "首次安装需从两个 MIT 源仓库下载约 65 MB（787 张底图 + 手写字体），网络较慢时可调大。重载插件后生效。",
     "type": "int",
     "slider": {
       "min": 120,
       "max": 3600,
       "step": 60
     },
-    "default": 900
+    "default": 1800
   },
   "pjsk_output_scale": {
     "description": "PJSK 表情输出倍数",

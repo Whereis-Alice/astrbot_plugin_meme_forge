@@ -420,7 +420,7 @@ function renderOverview() {
   if (!pjskOn) {
     noteInto($("pjsk-overview-note"), "在插件配置里打开 pjsk_enabled，就能用序号总览图挑姿势做表情。", null, "i-info");
   } else if (!pjsk.installed) {
-    noteInto($("pjsk-overview-note"), "素材还没下载。让管理员在聊天里发送「/sk素材安装 确认」，约 30 MB 的开源素材会存进插件数据目录。", "warn");
+    noteInto($("pjsk-overview-note"), "素材还没下载。让管理员在聊天里发送「/sk素材安装 确认」，约 65 MB 的开源素材会存进插件数据目录。", "warn");
   } else if (!pjsk.ready) {
     noteInto($("pjsk-overview-note"), "素材不完整，再发一次「/sk素材安装 确认」即可续传缺失的贴图。", "danger");
   } else {
@@ -1747,7 +1747,7 @@ function pjskMatchCharacter(text) {
   return null;
 }
 
-// 支持和聊天指令一致的三种写法：206 / #206 / 未来3。
+// 支持和聊天指令一致的三种写法：449 / #449 / 未来3。
 function resolvePjskQuery(text) {
   const raw = String(text || "").trim().replace(/^#/, "");
   if (!raw) return null;
@@ -2075,7 +2075,7 @@ function renderPjskShell() {
     setPjskOff("正在读取 PJSK 素材", ["马上就好。"]);
   } else if (!status || !status.installed) {
     setPjskOff("PJSK 素材还没安装", [
-      "让管理员在聊天里发送 ", install, "，插件会下载约 30 MB 的开源贴图与字体到数据目录，安装完刷新本页即可。",
+      "让管理员在聊天里发送 ", install, "，插件会下载约 65 MB 的开源贴图与字体到数据目录，安装完刷新本页即可。",
     ]);
   } else {
     setPjskOff("PJSK 素材不完整", [
@@ -2250,7 +2250,7 @@ function bindPjsk() {
     event.preventDefault();
     const index = resolvePjskQuery(search.value);
     if (index === null) {
-      toast("认不出这个角色或序号，试试 206 或 未来3", "error");
+      toast("认不出这个角色或序号，试试 449 或 未来3", "error");
       return;
     }
     selectPjskSticker(index, { render: true });

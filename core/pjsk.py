@@ -728,28 +728,36 @@ def _render_grouped_sheet(
     image_root: Path,
     *,
     thumb: tuple[int, int],
+    columns: int = 26,
     footer: str = "",
 ) -> bytes:
-    """Draw every sticker as one rounded panel per character."""
+    """Draw one rounded panel per character, wrapping wide rows onto new lines."""
     groups = [
         (character, catalog.character_stickers(character))
         for character in catalog.characters()
     ]
-    columns = max((len(items) for _, items in groups), default=1)
+    widest = max((len(items) for _, items in groups), default=1)
+    columns = max(1, min(columns, widest))
     gap, pad, panel_pad, panel_gap = 10, 28, 26, 14
-    head_line, index_line = 32, 22
-    index_font = load_font(15, bold=True)
+    head_line, index_line, row_gap = 32, 20, 8
+    index_font = load_font(14, bold=True)
     name_font = load_font(21, bold=True)
     meta_font = load_font(15)
     cell_w = thumb[0] + 6
+    cell_h = thumb[1] + 2 + index_line
     inner = columns * cell_w + (columns - 1) * gap
     width = pad * 2 + panel_pad * 2 + inner
-    panel_h = head_line + thumb[1] + 2 + index_line + 14
+    panel_heights = [
+        head_line + lines * cell_h + (lines - 1) * row_gap + 14
+        for lines in (
+            max(1, -(-len(items) // columns)) for _, items in groups
+        )
+    ]
     footer_h = 46 if footer else 0
     height = (
         SHEET_HEADER_H
         + pad
-        + len(groups) * panel_h
+        + sum(panel_heights)
         + (len(groups) - 1) * panel_gap
         + pad
         + footer_h
@@ -757,8 +765,9 @@ def _render_grouped_sheet(
     image = Image.new("RGB", (width, height), SHEET_BACKGROUND)
     draw = ImageDraw.Draw(image)
     content_left = pad + panel_pad
+    top = SHEET_HEADER_H + pad
     for row, (character, items) in enumerate(groups):
-        top = SHEET_HEADER_H + pad + row * (panel_h + panel_gap)
+        panel_h = panel_heights[row]
         draw.rounded_rectangle(
             (pad, top, width - pad, top + panel_h),
             radius=16,
@@ -782,20 +791,23 @@ def _render_grouped_sheet(
             SHEET_MUTED,
             inner - 172,
         )
-        for column, sticker in enumerate(items):
+        for position, sticker in enumerate(items):
+            line, column = divmod(position, columns)
             left = content_left + column * (cell_w + gap)
+            cell_top = top + head_line + line * (cell_h + row_gap)
             art = _thumbnail(sticker_path(image_root, sticker), thumb)
             if art is not None:
-                image.paste(art, (left + 3, top + head_line), art)
+                image.paste(art, (left + 3, cell_top), art)
             _label(
                 draw,
-                (left + 3, top + head_line + thumb[1] + 2),
+                (left + 3, cell_top + thumb[1] + 2),
                 str(sticker.index),
                 index_font,
                 character.color,
                 thumb[0],
                 centre=True,
             )
+        top += panel_h + panel_gap
     _sheet_header(image, title, subtitle)
     _sheet_footer(image, footer, footer_h)
     return save_png(image)
@@ -822,7 +834,7 @@ def render_character_sheet(image_root: Path) -> bytes:
         thumb=(176, 152),
         footer=(
             "下一步：/sk角色 16 → 看这位角色的表情序号 ｜"
-            " /sk 206 你好呀 → 直接出图（也可写 /sk角色 未来）"
+            " /sk 449 你好呀 → 直接出图（也可写 /sk角色 未来）"
         ),
     )
 
@@ -848,7 +860,7 @@ def render_character_stickers_sheet(
         f" {len(cells)} 张底图 · 表情序号 {character.range_label}"
         f" · 别名 {character.key}",
         cells,
-        columns=4 if len(cells) <= 12 else 5,
+        columns=4 if len(cells) <= 12 else (5 if len(cells) <= 24 else 6),
         thumb=(220, 190),
         footer=(
             f"用法：/sk {items[0].index} 你想说的话（可加 -c 弧形、-s 字号）"
@@ -858,11 +870,12 @@ def render_character_stickers_sheet(
 
 
 def render_all_stickers_sheet(image_root: Path) -> bytes:
-    """Draw the full 359-sticker contact sheet, grouped by character."""
+    """Draw the whole catalogue as one contact sheet, grouped by character."""
     return _render_grouped_sheet(
         "PJSK 表情工坊 · 全部底图",
         f"{catalog.IMAGE_COUNT} 张底图按角色分组，图下的数字即 /sk 用的表情序号",
         image_root,
-        thumb=(76, 66),
+        thumb=(60, 52),
+        columns=26,
         footer="太长可改用 /sk角色 <角色号或角色名> 只看一位角色",
     )

@@ -12,6 +12,7 @@ from PIL import Image
 
 from astrbot_plugin_meme_forge.core import pjsk, pjsk_catalog
 from astrbot_plugin_meme_forge.core.dashboard import DashboardError, MemeDashboard
+from astrbot_plugin_meme_forge.core.favorites import FavoriteEntry
 from astrbot_plugin_meme_forge.core.imaging import ImageRenderError
 from astrbot_plugin_meme_forge.core.pjsk_assets import PjskAssetError, PjskAssetManager
 from astrbot_plugin_meme_forge.core.pjsk_command import (
@@ -58,25 +59,28 @@ class PjskCatalogTests(unittest.TestCase):
         cursor = 1
         for character in pjsk_catalog.characters():
             self.assertEqual(character.first_index, cursor)
-            self.assertEqual(character.count, len(character.sticker_numbers))
+            self.assertEqual(
+                character.count,
+                len(pjsk_catalog.character_stickers(character)),
+            )
             cursor = character.last_index + 1
         self.assertEqual(cursor - 1, pjsk_catalog.IMAGE_COUNT)
 
     def test_selector_accepts_index_alias_and_character_number(self) -> None:
         self.assertEqual(pjsk_catalog.sticker_by_index(137).index, 137)
-        for token in ("206", "miku3", "未来3", "MIKU 3", "#206"):
+        for token in ("449", "miku3", "未来3", "MIKU 3", "#449"):
             selection = pjsk_catalog.parse_selector(token)
             self.assertIsNotNone(selection, token)
-            self.assertEqual(selection.sticker.index, 206, token)
+            self.assertEqual(selection.sticker.index, 449, token)
             self.assertTrue(selection.is_exact, token)
         loose = pjsk_catalog.parse_selector("未来")
         self.assertEqual(loose.character.key, "miku")
         self.assertIsNone(loose.sticker)
         self.assertFalse(loose.is_exact)
-        self.assertEqual(pjsk_catalog.parse_selector("rui16").sticker.index, 286)
+        self.assertEqual(pjsk_catalog.parse_selector("rui16").sticker.index, 624)
 
     def test_selector_rejects_out_of_range_and_unknown_tokens(self) -> None:
-        for token in ("360", "0", "-3", "nope", "", "未来99"):
+        for token in ("788", "0", "-3", "nope", "", "未来99"):
             self.assertIsNone(pjsk_catalog.parse_selector(token), token)
         self.assertIsNone(pjsk_catalog.sticker_by_index(0))
         self.assertIsNone(pjsk_catalog.sticker_by_index(pjsk_catalog.IMAGE_COUNT + 1))
@@ -101,19 +105,19 @@ class PjskCatalogTests(unittest.TestCase):
             self.assertIsNone(pjsk_catalog.parse_character_selector(token), token)
 
     def test_labels_stay_human_readable(self) -> None:
-        sticker = pjsk_catalog.sticker_by_index(206)
-        self.assertEqual(sticker.label, "206. 初音未来 03")
-        self.assertEqual(sticker.name, "Miku 03")
-        self.assertEqual(sticker.image, "Miku/Miku_03.png")
-        self.assertEqual(len(pjsk_catalog.character_stickers(sticker.character)), 13)
+        sticker = pjsk_catalog.sticker_by_index(449)
+        self.assertEqual(sticker.label, "449. 初音未来 3")
+        self.assertEqual(sticker.name, "Miku 3")
+        self.assertEqual(sticker.image, "miku/miku3.png")
+        self.assertEqual(len(pjsk_catalog.character_stickers(sticker.character)), 41)
 
 
 class PjskArgumentTests(unittest.TestCase):
     def test_dash_options_are_split_from_caption_words(self) -> None:
         parsed = parse_arguments(
-            ["206", "hello", "world", "-s", "40", "--旋转", "-2.5", "-c"]
+            ["449", "hello", "world", "-s", "40", "--旋转", "-2.5", "-c"]
         )
-        self.assertEqual(parsed.words, ("206", "hello", "world"))
+        self.assertEqual(parsed.words, ("449", "hello", "world"))
         self.assertEqual(parsed.font_size, 40.0)
         self.assertEqual(parsed.rotate, -2.5)
         self.assertTrue(parsed.curve)
@@ -130,11 +134,11 @@ class PjskArgumentTests(unittest.TestCase):
                 parse_arguments(case)
 
     def test_target_resolution_supports_two_step_selection(self) -> None:
-        target = resolve_target(["206", "hello", "world"])
-        self.assertEqual(target.sticker.index, 206)
+        target = resolve_target(["449", "hello", "world"])
+        self.assertEqual(target.sticker.index, 449)
         self.assertEqual(target.text, "hello world")
         split = resolve_target(["未来", "3", "早上好"])
-        self.assertEqual(split.sticker.index, 206)
+        self.assertEqual(split.sticker.index, 449)
         self.assertEqual(split.text, "早上好")
         loose = resolve_target(["未来", "早上好"])
         self.assertIsNone(loose.sticker)
@@ -163,7 +167,7 @@ class PjskArgumentTests(unittest.TestCase):
         text = "\n".join(usage_lines())
         self.assertIn("/sk角色", text)
         self.assertIn("/sk表情", text)
-        self.assertIn("/sk 206", text)
+        self.assertIn("/sk 449", text)
         self.assertIn("角色号", text)
         self.assertIn("表情序号", text)
         self.assertIn("/pjsk", text)
@@ -178,7 +182,7 @@ class PjskRenderTests(unittest.TestCase):
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name)
-        self.sticker = pjsk_catalog.sticker_by_index(206)
+        self.sticker = pjsk_catalog.sticker_by_index(449)
 
     def tearDown(self) -> None:
         self.directory.cleanup()
@@ -218,7 +222,7 @@ class PjskRenderTests(unittest.TestCase):
         self.assertEqual(" ".join(layout.lines), self.sticker.default_text)
 
     def test_render_produces_a_scaled_png(self) -> None:
-        image_path = self.root / "Miku_03.png"
+        image_path = self.root / "miku3.png"
         image_path.write_bytes(blank_artwork())
         try:
             data = pjsk.render_sticker(
@@ -238,8 +242,8 @@ class PjskRenderTests(unittest.TestCase):
 
     def test_sticker_path_follows_the_catalogue_layout(self) -> None:
         path = pjsk.sticker_path(self.root, self.sticker)
-        self.assertEqual(path.parent.name, "Miku")
-        self.assertEqual(path.name, "Miku_03.png")
+        self.assertEqual(path.parent.name, "miku")
+        self.assertEqual(path.name, "miku3.png")
 
 
 class PjskAssetManagerTests(unittest.TestCase):
@@ -251,9 +255,9 @@ class PjskAssetManagerTests(unittest.TestCase):
         self.directory.cleanup()
 
     def test_image_path_only_resolves_catalogue_members(self) -> None:
-        resolved = self.manager.image_path("Miku/Miku_03.png")
-        self.assertEqual(resolved.parent, self.manager.images_root / "Miku")
-        for bad in ("nope.png", "../secret.png", "Miku/Miku_99.png"):
+        resolved = self.manager.image_path("miku/miku3.png")
+        self.assertEqual(resolved.parent, self.manager.images_root / "miku")
+        for bad in ("nope.png", "../secret.png", "miku/miku99.png"):
             with self.assertRaises(PjskAssetError):
                 self.manager.image_path(bad)
 
@@ -329,18 +333,17 @@ class PjskFavoriteCommandTests(unittest.TestCase):
         self.plugin.config = {"trigger_prefix": "meme"}
 
     def test_both_spellings_resolve_to_the_same_favorite(self) -> None:
-        for keyword in ("sk 206", "SK206", "sk：206", "pjsk 206", "PJSK206", "206"):
+        for keyword in ("sk 449", "SK449", "sk：449", "pjsk 449", "PJSK449", "449"):
             with self.subTest(keyword=keyword):
                 self.assertEqual(
                     MemeForgePlugin._pjsk_unfavorite_key(keyword),
-                    "pjsk:206",
+                    "pjsk:miku3",
                 )
 
     def test_prefix_is_only_dropped_when_a_selector_follows(self) -> None:
-        expected = pjsk_catalog.parse_selector("未来3").sticker.index
         self.assertEqual(
             MemeForgePlugin._pjsk_unfavorite_key("sk 未来3"),
-            f"pjsk:{expected}",
+            "pjsk:miku3",
         )
         for keyword in ("", "sk", "pjsk", "sk未来3", "奶茶"):
             with self.subTest(keyword=keyword):
@@ -348,12 +351,102 @@ class PjskFavoriteCommandTests(unittest.TestCase):
 
     def test_favorite_command_prefers_the_short_prefix(self) -> None:
         self.assertEqual(
-            self.plugin._favorite_command("pjsk:206", "PJSK"),
-            "/sk 206 你的文字",
+            self.plugin._favorite_command("pjsk:miku3", "PJSK"),
+            "/sk 449 你的文字",
         )
         self.assertEqual(
             self.plugin._favorite_command("bubble_tea", "奶茶"),
             "/meme 奶茶",
+        )
+
+    def test_every_saved_token_survives_a_round_trip(self) -> None:
+        for sticker in pjsk_catalog.stickers():
+            with self.subTest(token=sticker.token):
+                selection = pjsk_catalog.parse_selector(sticker.token)
+                self.assertIsNotNone(selection)
+                self.assertEqual(selection.sticker, sticker)
+                self.assertEqual(
+                    self.plugin._pjsk_favorite_sticker(f"pjsk:{sticker.token}"),
+                    sticker,
+                )
+
+    def test_a_key_is_only_pjsk_when_it_carries_the_marker(self) -> None:
+        self.assertTrue(MemeForgePlugin._is_pjsk_favorite("pjsk:miku3"))
+        for key in ("", "bubble_tea", "pjsk", "sk:miku3", "pjsk:", "pjsk:未知9"):
+            with self.subTest(key=key):
+                self.assertIsNone(MemeForgePlugin._pjsk_favorite_sticker(key))
+
+
+class PjskLegacyFavoriteTests(unittest.TestCase):
+    """Favorites saved under the retired 359-sticker numbering keep working."""
+
+    def setUp(self) -> None:
+        self.plugin = MemeForgePlugin.__new__(MemeForgePlugin)
+        self.plugin.config = {"trigger_prefix": "meme"}
+
+    def test_known_old_numbers_land_on_the_same_artwork(self) -> None:
+        pairs = (
+            (1, "airi2"),
+            (11, "airi1"),
+            (122, "kanade1"),
+            (206, "miku3"),
+            (359, "tsukasa13"),
+        )
+        for legacy, token in pairs:
+            with self.subTest(legacy=legacy):
+                sticker = pjsk_catalog.sticker_by_legacy_index(legacy)
+                self.assertIsNotNone(sticker)
+                self.assertEqual(sticker.token, token)
+
+    def test_the_table_maps_each_old_number_to_at_most_one_sticker(self) -> None:
+        resolved = [
+            sticker
+            for legacy in range(1, pjsk_catalog.LEGACY_INDEX_COUNT + 1)
+            if (sticker := pjsk_catalog.sticker_by_legacy_index(legacy))
+        ]
+        self.assertEqual(len(resolved), 344)
+        self.assertEqual(len({sticker.index for sticker in resolved}), 344)
+        for legacy in (0, -1, pjsk_catalog.LEGACY_INDEX_COUNT + 1):
+            with self.subTest(legacy=legacy):
+                self.assertIsNone(pjsk_catalog.sticker_by_legacy_index(legacy))
+
+    def test_redrawn_entries_are_reported_instead_of_guessed(self) -> None:
+        entry = FavoriteEntry(key="pjsk:204", trigger="pjsk 204")
+        self.assertIsNone(pjsk_catalog.sticker_by_legacy_index(204))
+        self.assertEqual(
+            self.plugin._favorite_label(entry),
+            ("pjsk 204", "，底图已失效"),
+        )
+        self.assertEqual(
+            self.plugin._favorite_command(entry.key, entry.trigger),
+            "该底图已失效，请重新收藏",
+        )
+
+    def test_migration_rewrites_old_keys_and_leaves_everything_else(self) -> None:
+        stored = [
+            FavoriteEntry(key="pjsk:206", trigger="pjsk 206"),
+            FavoriteEntry(key="pjsk:204", trigger="pjsk 204"),
+            FavoriteEntry(key="bubble_tea", trigger="奶茶"),
+            FavoriteEntry(key="pjsk:rui16", trigger="神代类 16"),
+        ]
+        migrated = MemeForgePlugin._migrate_favorites(stored)
+        self.assertEqual(
+            [entry.key for entry in migrated],
+            ["pjsk:miku3", "pjsk:204", "bubble_tea", "pjsk:rui16"],
+        )
+        self.assertEqual(migrated[0].trigger, "pjsk 206")
+        self.assertIs(MemeForgePlugin._migrate_favorites(migrated), migrated)
+
+    def test_a_stale_number_can_still_be_removed(self) -> None:
+        stored = [FavoriteEntry(key="pjsk:204", trigger="pjsk 204")]
+        self.assertEqual(
+            MemeForgePlugin._pjsk_unfavorite_key("pjsk 204", stored),
+            "pjsk:204",
+        )
+        current = pjsk_catalog.sticker_by_index(204)
+        self.assertEqual(
+            MemeForgePlugin._pjsk_unfavorite_key("pjsk 204"),
+            f"pjsk:{current.token}",
         )
 
 
@@ -505,8 +598,8 @@ class PjskDashboardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("range_label", first)
         miku = payload["characters"][15]
         self.assertEqual((miku["key"], miku["number"]), ("miku", 16))
-        sticker = payload["items"][205]
-        self.assertEqual(sticker["index"], 206)
+        sticker = payload["items"][448]
+        self.assertEqual(sticker["index"], 449)
         self.assertEqual(sticker["character"], "miku")
         limits = payload["limits"]
         self.assertEqual(limits["canvas"]["width"], pjsk_catalog.CANVAS_WIDTH)
@@ -523,9 +616,9 @@ class PjskDashboardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["output_scale"], 2)
 
     async def test_sticker_endpoint_returns_a_data_url(self) -> None:
-        self.write_artwork("Miku/Miku_03.png")
+        self.write_artwork("miku/miku3.png")
         payload = await self.dashboard.pjsk_sticker("miku3")
-        self.assertEqual(payload["index"], 206)
+        self.assertEqual(payload["index"], 449)
         self.assertEqual(payload["media_type"], "image/png")
         self.assertTrue(payload["data_url"].startswith("data:image/png;base64,"))
 
@@ -536,18 +629,18 @@ class PjskDashboardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_artwork_points_at_the_install_command(self) -> None:
         with self.assertRaises(DashboardError) as caught:
-            await self.dashboard.pjsk_render({"index": 206, "text": "hello"})
+            await self.dashboard.pjsk_render({"index": 449, "text": "hello"})
         self.assertIn("sk素材安装", str(caught.exception))
 
     async def test_render_reports_the_effective_layout(self) -> None:
-        self.write_artwork("Miku/Miku_03.png")
+        self.write_artwork("miku/miku3.png")
         try:
             payload = await self.dashboard.pjsk_render(
-                {"index": "206", "text": "早上好", "font_size": 40, "curve": True}
+                {"index": "449", "text": "早上好", "font_size": 40, "curve": True}
             )
         except DashboardError as exc:
             self.skipTest(f"渲染不可用：{exc}")
-        self.assertEqual(payload["index"], 206)
+        self.assertEqual(payload["index"], 449)
         self.assertEqual(payload["character"], "miku")
         self.assertTrue(payload["layout"]["curve"])
         self.assertEqual(payload["layout"]["lines"], ["早上好"])
@@ -555,15 +648,15 @@ class PjskDashboardTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["data_url"].startswith("data:image/png;base64,"))
 
     async def test_render_rejects_out_of_range_options(self) -> None:
-        self.write_artwork("Miku/Miku_03.png")
+        self.write_artwork("miku/miku3.png")
         with self.assertRaises(DashboardError):
-            await self.dashboard.pjsk_render({"index": 206, "rotate": 90})
+            await self.dashboard.pjsk_render({"index": 449, "rotate": 90})
 
     def test_command_hint_can_be_pasted_into_chat(self) -> None:
-        sticker = pjsk_catalog.sticker_by_index(206)
+        sticker = pjsk_catalog.sticker_by_index(449)
         options = coerce_options({"font_size": 40, "curve": True, "scale": 3})
         command = MemeDashboard._pjsk_command(sticker, "hello\nworld", options)
-        self.assertEqual(command, r"/sk 206 hello\nworld -s 40 -c --scale 3")
+        self.assertEqual(command, r"/sk 449 hello\nworld -s 40 -c --scale 3")
 
 
 if __name__ == "__main__":

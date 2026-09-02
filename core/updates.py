@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Final
+from urllib.parse import quote
 
 import aiohttp
+
+from . import pjsk_catalog
 
 PYPI_API_URL = "https://pypi.org/pypi/meme-generator/json"
 SUPPORTED_MINIMUM = (0, 2, 3, 0)
@@ -12,9 +16,50 @@ SUPPORTED_MAXIMUM = (0, 3, 0, 0)
 SUPPORTED_RANGE_TEXT = ">=0.2.3,<0.3"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
+#: Branch watched for new PJSK artwork on the upstream sticker repository.
+PJSK_STICKER_BRANCH: Final = "main"
+#: GitHub API entry point for the repository pinned in :mod:`pjsk_catalog`.
+PJSK_STICKER_API_URL: Final = (
+    "https://api.github.com/repos/"
+    + pjsk_catalog.SOURCE_REPOSITORY.removeprefix("https://github.com/").strip("/")
+)
+USER_AGENT: Final = "astrbot-plugin-meme-forge/update-check"
+
 
 class UpdateCheckError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class SourceRevision:
+    """One upstream commit, as reported by the GitHub commits API."""
+
+    commit: str
+    committed_at: str
+    url: str
+
+    @property
+    def short_commit(self) -> str:
+        """First twelve characters, which is what the chat replies show."""
+        return self.commit[:12]
+
+
+def parse_source_revision(payload: Any) -> SourceRevision:
+    """Validate one GitHub commit payload before trusting any of its fields."""
+    if not isinstance(payload, dict):
+        raise UpdateCheckError("GitHub 返回格式无效")
+    commit = str(payload.get("sha") or "")
+    details = payload.get("commit")
+    author = details.get("author") if isinstance(details, dict) else None
+    committed_at = str(author.get("date") or "") if isinstance(author, dict) else ""
+    url = str(payload.get("html_url") or "")
+    if (
+        not re.fullmatch(r"[0-9a-f]{40}", commit)
+        or not committed_at
+        or not url.startswith("https://")
+    ):
+        raise UpdateCheckError("GitHub 响应缺少提交信息")
+    return SourceRevision(commit=commit, committed_at=committed_at, url=url)
 
 
 def stable_version_key(value: str) -> tuple[int, int, int, int] | None:
@@ -78,29 +123,51 @@ def format_check_error(error: BaseException) -> str:
     return detail if len(detail) <= 200 else detail[:197] + "..."
 
 
-async def fetch_latest_compatible_meme_generator() -> str:
+async def _fetch_json(
+    url: str,
+    label: str,
+    headers: dict[str, str] | None = None,
+) -> Any:
+    """GET one small JSON document with a hard cap on the response size."""
     timeout = aiohttp.ClientTimeout(total=20, connect=10, sock_read=10)
+    request_headers = {"User-Agent": USER_AGENT}
+    request_headers.update(headers or {})
     async with (
         aiohttp.ClientSession(
             timeout=timeout,
             trust_env=True,
-            headers={"User-Agent": "astrbot-plugin-meme-forge/update-check"},
+            headers=request_headers,
         ) as session,
-        session.get(PYPI_API_URL) as response,
+        session.get(url) as response,
     ):
         response.raise_for_status()
         if response.content_length and response.content_length > MAX_RESPONSE_BYTES:
-            raise UpdateCheckError("PyPI 响应超过安全大小限制")
+            raise UpdateCheckError(f"{label}响应超过安全大小限制")
         chunks: list[bytes] = []
         size = 0
         async for chunk in response.content.iter_chunked(64 * 1024):
             size += len(chunk)
             if size > MAX_RESPONSE_BYTES:
-                raise UpdateCheckError("PyPI 响应超过安全大小限制")
+                raise UpdateCheckError(f"{label}响应超过安全大小限制")
             chunks.append(chunk)
         data = b"".join(chunks)
     try:
-        payload = json.loads(data)
+        return json.loads(data)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise UpdateCheckError("PyPI 返回的 JSON 无效") from exc
+        raise UpdateCheckError(f"{label}返回的 JSON 无效") from exc
+
+
+async def fetch_latest_compatible_meme_generator() -> str:
+    payload = await _fetch_json(PYPI_API_URL, "PyPI ")
     return latest_compatible_release(payload)
+
+
+async def fetch_pjsk_sticker_revision() -> SourceRevision:
+    """Read the newest commit of the upstream PJSK artwork repository."""
+    url = f"{PJSK_STICKER_API_URL}/commits/{quote(PJSK_STICKER_BRANCH, safe='')}"
+    payload = await _fetch_json(
+        url,
+        "GitHub ",
+        headers={"Accept": "application/vnd.github+json"},
+    )
+    return parse_source_revision(payload)

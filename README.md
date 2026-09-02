@@ -24,7 +24,7 @@ Meme 工坊是面向 AstrBot 4.x 的本地 meme 表情包生成插件。它使�
 - 可选安装 Gouqi 扩展的 10 个自定义模板；素材逐文件校验，安装后立即参与随机、收藏和 WebUI 管理。
 - 提供只读更新检查，分别报告内置引擎、`meme_emoji` 和 Gouqi 扩展状态。
 - 内置 Meme Maker：用图层化模板自己做表情包，保存后即刻变成可以直接触发的 meme。
-- 可选的 PJSK 表情工坊：`/sk角色` 翻人 → 角色页读表情序号 → 配文字出图，26 位角色、359 张底图全部本地渲染。
+- 可选的 PJSK 表情工坊：`/sk角色` 翻人 → 角色页读表情序号 → 配文字出图，26 位角色、787 张底图全部本地渲染。
 - 在 Dashboard 中搜索、筛选、预览、查看参数与素材、启停单个 meme，查看最近生成记录，并在工作台里可视化编辑自制模板与 PJSK 表情。
 - 带透明区域的成图默认转成 GIF 再发送，绕开 QQ 手机端把 PNG 透明像素画成黑块的问题；不透明的图保持原格式。
 
@@ -218,10 +218,16 @@ PJSK 表情工坊把 Project Sekai 的手写体贴纸做成「看图报号」的
 
 > 指令前缀从 `/pjsk` 简化成了 `/sk`，少打两个字母。旧写法全部保留为别名，原来的用法不会失效。
 
+> **从 v1.10.4 及更早版本升级**：底图换到了维护中的上游分支，数量从 359 张增加到 787 张，
+> 表情序号整体重排（旧的 `/sk 206` 现在是 `/sk 449`）。收藏夹会在你下次打开时自动迁移，
+> 359 个旧序号里有 344 个能对上新底图，剩下 15 个在新素材里已被重画或删除，会标注
+> 「底图已失效」，照收藏夹里印出的序号执行 `/meme取消收藏 pjsk <序号>` 即可清掉。
+> 升级后请让管理员重新执行一次 `/sk素材安装 确认`，否则本地还是旧的一套底图。
+
 ```text
 /sk角色              → 26 位角色总览图，每人头上的大号数字是「角色号」
 /sk角色 16           → 翻开 16 号角色（初音未来），看每张底图的「表情序号」
-/sk 206 Wonderhoy    → 出图
+/sk 449 Wonderhoy    → 出图
 ```
 
 ### 两种数字
@@ -231,11 +237,11 @@ PJSK 表情工坊把 Project Sekai 的手写体贴纸做成「看图报号」的
 | 编号 | 范围 | 跟在哪个指令后 | 例子 |
 |---|---|---|---|
 | **角色号** | 1 ~ 26 | 只有 `/sk角色` | `/sk角色 16` → 打开初音未来的角色页 |
-| **表情序号** | 1 ~ 359 | `/sk` 出图、`/sk表情` 查图 | `/sk 16 你好` → 用第 16 张底图出图 |
+| **表情序号** | 1 ~ 787 | `/sk` 出图、`/sk表情` 查图 | `/sk 16 你好` → 用第 16 张底图出图 |
 
 也就是说 `/sk角色 16` 和 `/sk 16 你好` 指的不是同一张图。这样分开是为了让「翻角色」和「选表情」
-各自都能用一串短数字，不用在 26 和 359 两个范围里换算。填串了也不会静默出错：`/sk角色 206`
-会明确告诉你角色号只到 26，并提示 206 应该写成 `/sk 206 你的文字`（出图）或 `/sk表情 206`
+各自都能用一串短数字，不用在 26 和 787 两个范围里换算。填串了也不会静默出错：`/sk角色 449`
+会明确告诉你角色号只到 26，并提示 449 应该写成 `/sk 449 你的文字`（出图）或 `/sk表情 449`
 （看它属于哪位角色）。
 
 懒得记角色号就直接写名字：`/sk角色 未来`、`/sk角色 miku`、`/sk角色 16` 三种写法完全等价。
@@ -246,11 +252,11 @@ PJSK 表情工坊把 Project Sekai 的手写体贴纸做成「看图报号」的
 
 | 写法 | 示例 | 说明 |
 |---|---|---|
-| 表情序号 | `/sk 206 早上好` | 1 ~ 359，照 `/sk角色 16` 的角色页读 |
+| 表情序号 | `/sk 449 早上好` | 1 ~ 787，照 `/sk角色 16` 的角色页读 |
 | 角色 + 编号 | `/sk 未来3 早上好` | 该角色的第 3 张，`miku3`、`MIKU 3` 同义 |
 | 分开写 | `/sk 未来 3 早上好` | 与上一行等价 |
 | 只写角色 | `/sk 未来 早上好` | 从该角色的图里随机一张 |
-| 完全随机 | `/sk随机 早上好` | 从 359 张里随机一张 |
+| 完全随机 | `/sk随机 早上好` | 从 787 张里随机一张 |
 
 角色名支持中文名、日文名、罗马字和常用缩写（例如 `未来` / `miku`、`心羽` / `kohane`、`类` / `rui`）。
 认不出的写法会直接提示你去看总览图，不会默默出一张别的图。
@@ -269,7 +275,7 @@ PJSK 表情工坊把 Project Sekai 的手写体贴纸做成「看图报号」的
 
 ```text
 /sk 未来3 早上好 -s 34 -r 2 -c
-/sk 206 今天也要\n加油 --scale 3
+/sk 449 今天也要\n加油 --scale 3
 ```
 
 不写参数时使用每张图的官方默认排版；文字里的 `\n` 会换行，单次最多 6 行、160 字。
@@ -285,13 +291,14 @@ PJSK 表情工坊把 Project Sekai 的手写体贴纸做成「看图报号」的
 | `/sk随机 [文字] [参数]` | 所有人 | 随机一张，回复里带上它的序号和指令 |
 | `/sk帮助` | 所有人 | 用法速查（不带任何参数的 `/sk` 也会显示） |
 | `/sk素材状态` | 所有人 | 查看素材安装、校验和输出倍数 |
-| `/sk素材安装 确认` | 管理员 | 下载并逐项校验素材，约 30 MB |
+| `/sk素材安装 确认` | 管理员 | 下载并逐项校验素材，约 65 MB |
 
 兼容别名：`/sk角色表`、`/sk列表`、`/sk菜单`、`/随机sk`、`/sk抽一张`、`/sk用法` 等，`SK` 大写形式同理；
 `/sk 角色 16`、`/sk 表情`、`/sk 随机`、`/sk 帮助` 这种把子命令写在 `/sk` 后面的形式也认。
 
 旧指令 `/pjsk`、`/pjsk角色`、`/pjsk表情`、`/pjsk随机`、`/pjsk帮助`、`/pjsk素材状态`、`/pjsk素材安装 确认`
-仍然全部可用，`PJSK` 大写形式同理，所以旧的群聊习惯和收藏里的老命令都不用改。
+仍然全部可用，`PJSK` 大写形式同理，旧的群聊习惯不用改。只有表情序号在换源后重排过，
+见本节开头的升级提示。
 
 ### 素材与授权
 
@@ -300,7 +307,7 @@ PJSK 表情工坊把 Project Sekai 的手写体贴纸做成「看图报号」的
 
 | 内容 | 来源 | 许可 | 体积 |
 |---|---|---|---:|
-| 359 张贴纸底图 | [`TheOriginalAyaka/sekai-stickers`](https://github.com/TheOriginalAyaka/sekai-stickers) | MIT | 约 21 MB |
+| 787 张贴纸底图 | [`laffylaffyla/sekai-stickers`](https://github.com/laffylaffyla/sekai-stickers) | MIT | 约 53 MB |
 | 手写字体 `YurukaFangTang.ttf` | [`Agnes4m/nonebot_plugin_pjsk`](https://github.com/Agnes4m/nonebot_plugin_pjsk) | MIT | 约 5 MB |
 
 - 下载固定在已审阅的提交上，逐个文件校验相对路径、大小和 Git blob 哈希，任何一项不符就整体失败，不会留下半套素材。
@@ -310,7 +317,7 @@ PJSK 表情工坊把 Project Sekai 的手写体贴纸做成「看图报号」的
 
 ### 和其他功能的联动
 
-- **收藏**：引用 Bot 发出的 PJSK 表情发送 `/meme收藏`，收藏夹里会给出 `/sk 206 你的文字` 形式的可复用命令；`/meme工坊取消收藏 sk 206`（或 `pjsk 206`）移除。
+- **收藏**：引用 Bot 发出的 PJSK 表情发送 `/meme收藏`，收藏夹里会给出 `/sk 449 你的文字` 形式的可复用命令；`/meme工坊取消收藏 sk 449`（或 `pjsk 449`）移除。
 - **最近记录**：每次成功出图都会写入个人最近、本群最近和全局最近。
 - **WebUI**：Dashboard 里有一个 PJSK 页，可以看着图选、拖参数、实时预览，并把调好的指令复制到聊天里用（见下一节）。
 - **配置项**：`pjsk_enabled`（默认开）、`pjsk_output_scale`（1 ~ 4，默认 2 倍，底图为 296×256）、`pjsk_download_timeout`（首次下载超时）。
@@ -487,7 +494,7 @@ PJSK 页的具体能力：
 | 配置项 | 默认值 | 说明 |
 |---|---:|---|
 | `pjsk_enabled` | `true` | 是否注册 `/sk` 系列指令并在 WebUI 显示「PJSK」页，重载后生效 |
-| `pjsk_download_timeout` | `900` | 首次素材下载超时（秒），范围 120-3600 |
+| `pjsk_download_timeout` | `1800` | 首次素材下载超时（秒），范围 120-3600 |
 | `pjsk_output_scale` | `2` | 默认输出倍数（底图 296x256），单条指令可用 `--scale` 覆盖 |
 
 ## 数据、隐私与网络
@@ -529,8 +536,8 @@ PJSK 页的具体能力：
 
 ### `/sk` 说素材还没装好
 
-让管理员执行 `/sk素材安装 确认`。首次安装要从 GitHub 下载约 30 MB，网络慢时把配置项
-`pjsk_download_timeout` 调大后重载插件。装完用 `/sk素材状态` 复核：底图应为 359/359，
+让管理员执行 `/sk素材安装 确认`。首次安装要从 GitHub 下载约 65 MB，网络慢时把配置项
+`pjsk_download_timeout` 调大后重载插件。装完用 `/sk素材状态` 复核：底图应为 787/787，
 字体一行显示已安装。校验不通过多半是下载被截断或代理返回了 HTML 页面，重跑一次安装即可，
 它会覆盖不完整的文件。
 
@@ -584,7 +591,8 @@ AstrBot 只读取插件根目录下的 `logo.png`，没有其他回退路径。�
 - [`anyliew/meme_emoji`](https://github.com/anyliew/meme_emoji) 与 [`anyliew/meme-emoji`](https://github.com/anyliew/meme-emoji)：扩展表情和 Rust 兼容实现来源。
 - [`amalopyy123/meme-generator-gouqi`](https://github.com/amalopyy123/meme-generator-gouqi)：Gouqi 扩展的模板设计与素材来源；感谢作者提供这些自定义 meme。由于上游尚未声明许可证，本插件不打包其源码和素材。
 - [`camera-2018/astrbot_plugin_pjsk`](https://github.com/camera-2018/astrbot_plugin_pjsk)：PJSK 表情工坊的功能参考。其代码没有被引入——上游用 Playwright 驱动 Chromium 渲染（首次启动会自动安装浏览器与 Linux 系统依赖，可能需要 root 权限），且 README 声明 MIT 但仓库内没有 LICENSE 文件。本插件改成纯 Pillow 本地渲染，并把「先查 ID 再用 `-i` 传参」换成「总览图看角色号 → 角色页看表情序号 → 出图」的看图报号流程。
-- [`TheOriginalAyaka/sekai-stickers`](https://github.com/TheOriginalAyaka/sekai-stickers)：PJSK 贴纸底图与每张图默认排版数据的来源（MIT）。
+- [`laffylaffyla/sekai-stickers`](https://github.com/laffylaffyla/sekai-stickers)：PJSK 贴纸底图与每张图默认排版数据的直接来源（MIT）。v1.10.5 起改用这个仍在维护的分支，底图从 359 张增加到 787 张。
+- [`TheOriginalAyaka/sekai-stickers`](https://github.com/TheOriginalAyaka/sekai-stickers)：上面那份素材的原始项目（MIT），目前已归档，v1.10.4 及更早版本用的是它。
 - [`Agnes4m/nonebot_plugin_pjsk`](https://github.com/Agnes4m/nonebot_plugin_pjsk)：PJSK 手写字体 `YurukaFangTang.ttf` 的来源（MIT），也是上面那个 AstrBot 插件的原始移植来源。
 - [`MemeCrafters/meme-generator-rs`](https://github.com/MemeCrafters/meme-generator-rs)：实际使用的 meme 生成引擎。
 - [`dionaka/meme_maker`](https://github.com/dionaka/meme_maker)：Meme Maker 的灵感来源。该仓库本身是概念验证（固定区域贴图、依赖 OpenCV 与 dlib，且未声明许可证），因此本插件没有移植其代码，而是用现有的 Pillow 渲染层重新实现了一套图层化模板。

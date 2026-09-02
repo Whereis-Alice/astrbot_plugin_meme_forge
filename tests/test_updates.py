@@ -16,10 +16,12 @@ from astrbot_plugin_meme_forge.core.gouqi_extension import (
 )
 from astrbot_plugin_meme_forge.core.pjsk_assets import PjskAssetStatus
 from astrbot_plugin_meme_forge.core.updates import (
+    SourceRevision,
     UpdateCheckError,
     compare_engine_versions,
     format_check_error,
     latest_compatible_release,
+    parse_source_revision,
 )
 from astrbot_plugin_meme_forge.main import MemeForgePlugin
 
@@ -49,6 +51,28 @@ class UpdateVersionTests(unittest.TestCase):
 
     def test_empty_timeout_error_is_readable(self) -> None:
         self.assertEqual(format_check_error(TimeoutError()), "检查超时")
+
+    def test_commit_payload_is_validated_before_use(self) -> None:
+        revision = parse_source_revision(
+            {
+                "sha": "6668a26d37aec08a25674a4f3ad3f886ab9b2af2",
+                "commit": {"author": {"date": "2026-01-20T15:58:13Z"}},
+                "html_url": "https://github.com/example/commit/6668a26d",
+            }
+        )
+        self.assertEqual(revision.short_commit, "6668a26d37ae")
+        for payload in (
+            None,
+            {"sha": "short"},
+            {"sha": "6" * 40, "commit": {"author": {"date": ""}}},
+            {
+                "sha": "6" * 40,
+                "commit": {"author": {"date": "2026-01-20T15:58:13Z"}},
+                "html_url": "http://insecure.example",
+            },
+        ):
+            with self.assertRaises(UpdateCheckError):
+                parse_source_revision(payload)
 
 
 class UpdateCommandTests(unittest.IsolatedAsyncioTestCase):
@@ -107,6 +131,17 @@ class UpdateCommandTests(unittest.IsolatedAsyncioTestCase):
         )
 
     @staticmethod
+    def pjsk_revision(commit: str | None = None) -> AsyncMock:
+        sha = commit or pjsk_catalog.SOURCE_COMMIT
+        return AsyncMock(
+            return_value=SourceRevision(
+                commit=sha,
+                committed_at="2026-01-20T15:58:13Z",
+                url=f"https://example.com/{sha}",
+            )
+        )
+
+    @staticmethod
     def pjsk_assets(*, ready: bool = True) -> SimpleNamespace:
         return SimpleNamespace(
             STICKER_COMMIT=pjsk_catalog.SOURCE_COMMIT,
@@ -142,9 +177,15 @@ class UpdateCommandTests(unittest.IsolatedAsyncioTestCase):
         plugin.gouqi_extension = self.gouqi_extension()
         plugin.pjsk_assets = self.pjsk_assets()
 
-        with patch(
-            "astrbot_plugin_meme_forge.main.fetch_latest_compatible_meme_generator",
-            new=AsyncMock(return_value="0.2.3"),
+        with (
+            patch(
+                "astrbot_plugin_meme_forge.main.fetch_latest_compatible_meme_generator",
+                new=AsyncMock(return_value="0.2.3"),
+            ),
+            patch(
+                "astrbot_plugin_meme_forge.main.fetch_pjsk_sticker_revision",
+                new=self.pjsk_revision(),
+            ),
         ):
             output = await self.collect(plugin.check_updates(self.Event()))
 
@@ -163,9 +204,15 @@ class UpdateCommandTests(unittest.IsolatedAsyncioTestCase):
         plugin.gouqi_extension = self.gouqi_extension()
         plugin.pjsk_assets = self.pjsk_assets()
 
-        with patch(
-            "astrbot_plugin_meme_forge.main.fetch_latest_compatible_meme_generator",
-            new=AsyncMock(side_effect=UpdateCheckError("PyPI unavailable")),
+        with (
+            patch(
+                "astrbot_plugin_meme_forge.main.fetch_latest_compatible_meme_generator",
+                new=AsyncMock(side_effect=UpdateCheckError("PyPI unavailable")),
+            ),
+            patch(
+                "astrbot_plugin_meme_forge.main.fetch_pjsk_sticker_revision",
+                new=self.pjsk_revision(),
+            ),
         ):
             output = await self.collect(plugin.check_updates(self.Event()))
 
@@ -182,14 +229,45 @@ class UpdateCommandTests(unittest.IsolatedAsyncioTestCase):
         plugin.gouqi_extension = self.gouqi_extension(latest="f" * 40)
         plugin.pjsk_assets = self.pjsk_assets()
 
-        with patch(
-            "astrbot_plugin_meme_forge.main.fetch_latest_compatible_meme_generator",
-            new=AsyncMock(return_value="0.2.3"),
+        with (
+            patch(
+                "astrbot_plugin_meme_forge.main.fetch_latest_compatible_meme_generator",
+                new=AsyncMock(return_value="0.2.3"),
+            ),
+            patch(
+                "astrbot_plugin_meme_forge.main.fetch_pjsk_sticker_revision",
+                new=self.pjsk_revision(),
+            ),
         ):
             output = await self.collect(plugin.check_updates(self.Event()))
 
         self.assertIn("上游有未审阅改动", output)
         self.assertIn("需等待 Meme 工坊适配后更新", output)
+
+    async def test_unreviewed_pjsk_commit_is_reported_as_pending(self) -> None:
+        plugin = MemeForgePlugin.__new__(MemeForgePlugin)
+        plugin.engine = SimpleNamespace(version="0.2.3")
+        plugin.extension = SimpleNamespace(
+            latest_release=AsyncMock(return_value=self.extension_release("v1.0.0")),
+            status=lambda: self.extension_status("v1.0.0"),
+        )
+        plugin.gouqi_extension = self.gouqi_extension()
+        plugin.pjsk_assets = self.pjsk_assets()
+
+        with (
+            patch(
+                "astrbot_plugin_meme_forge.main.fetch_latest_compatible_meme_generator",
+                new=AsyncMock(return_value="0.2.3"),
+            ),
+            patch(
+                "astrbot_plugin_meme_forge.main.fetch_pjsk_sticker_revision",
+                new=self.pjsk_revision("a" * 40),
+            ),
+        ):
+            output = await self.collect(plugin.check_updates(self.Event()))
+
+        self.assertIn("- 上游最新提交：aaaaaaaaaaaa", output)
+        self.assertIn("上游底图有未审阅改动", output)
 
 
 if __name__ == "__main__":

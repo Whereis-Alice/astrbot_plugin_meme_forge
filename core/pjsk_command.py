@@ -255,12 +255,12 @@ def usage_lines() -> tuple[str, ...]:
             "2. /sk角色 16 → 翻开 16 号角色，看每张底图的表情序号"
             "（也可写 /sk角色 未来）"
         ),
-        "3. /sk 206 Wonderhoy → 生成表情包",
+        "3. /sk 449 Wonderhoy → 生成表情包",
         (
             f"两种数字别混：/sk角色 用角色号 1~{catalog.character_count()}，"
             f"/sk 与 /sk表情 用表情序号 1~{catalog.IMAGE_COUNT}。"
         ),
-        "选择方式：序号 206、角色加编号 未来3 / miku3、只写角色名则随机一张。",
+        "选择方式：序号 449、角色加编号 未来3 / miku3、只写角色名则随机一张。",
         "可选参数：",
         f"  -x 横向 0~{catalog.CANVAS_WIDTH}    -y 纵向 0~{catalog.CANVAS_HEIGHT}",
         f"  -r 旋转 -10~10    -s 字号 {MIN_FONT_SIZE}~{MAX_FONT_SIZE}",

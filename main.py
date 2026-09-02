@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+from collections.abc import Sequence
 from contextlib import suppress
 from types import SimpleNamespace
 from typing import Any
@@ -56,6 +57,7 @@ from .core.updates import (
     SUPPORTED_RANGE_TEXT,
     compare_engine_versions,
     fetch_latest_compatible_meme_generator,
+    fetch_pjsk_sticker_revision,
     format_check_error,
 )
 from .utils import compress_static_image
@@ -627,24 +629,37 @@ class MemeForgePlugin(Star):
         return f"/{prefix}{separator}{trigger}"
 
     @staticmethod
-    def _pjsk_favorite_index(key: str) -> int | None:
-        """Return the PJSK 序号 stored in a favorite key, if it is a PJSK one."""
+    def _is_pjsk_favorite(key: str) -> bool:
+        """Whether a favorite key points at a PJSK sticker instead of a meme."""
+        return str(key or "").startswith(PJSK_KEY_PREFIX)
+
+    @staticmethod
+    def _pjsk_favorite_sticker(key: str) -> Any | None:
+        """Resolve one PJSK favorite key to the sticker it still points at.
+
+        Keys written today carry a per-character token such as ``pjsk:miku3``,
+        which survives a renumbering of the 底图 library. Keys saved before that
+        library was rebuilt carry a bare global 序号 and go through the legacy
+        translation table, which cannot place the few pictures upstream redrew.
+        """
         text = str(key or "")
         if not text.startswith(PJSK_KEY_PREFIX):
             return None
-        try:
-            return int(text[len(PJSK_KEY_PREFIX) :])
-        except ValueError:
+        token = text[len(PJSK_KEY_PREFIX) :].strip()
+        if not token:
             return None
+        if token.isdigit():
+            return pjsk_catalog.sticker_by_legacy_index(int(token))
+        selection = pjsk_catalog.parse_selector(token)
+        return None if selection is None else selection.sticker
 
     def _favorite_label(self, entry: FavoriteEntry) -> tuple[str, str]:
         """Return the display trigger and a status suffix for one favorite."""
-        index = self._pjsk_favorite_index(entry.key)
-        if index is not None:
-            sticker = pjsk_catalog.sticker_by_index(index)
+        if self._is_pjsk_favorite(entry.key):
+            sticker = self._pjsk_favorite_sticker(entry.key)
             if sticker is None:
-                return entry.trigger, "，序号已失效"
-            return f"{sticker.character.display_name} {sticker.number}", ""
+                return entry.trigger, "，底图已失效"
+            return f"{sticker.character.display_name} {sticker.local_index}", ""
         meme = self.engine.resolve(entry.key)
         if meme is None:
             return entry.trigger, "，当前未加载"
@@ -654,18 +669,26 @@ class MemeForgePlugin(Star):
 
     def _favorite_command(self, key: str, trigger: str) -> str:
         """Return the command that reproduces one favorite."""
-        index = self._pjsk_favorite_index(key)
-        if index is not None:
-            return f"/sk {index} 你的文字"
+        if self._is_pjsk_favorite(key):
+            sticker = self._pjsk_favorite_sticker(key)
+            if sticker is None:
+                return "该底图已失效，请重新收藏"
+            return f"/sk {sticker.index} 你的文字"
         return self._format_trigger_command(trigger)
 
     @staticmethod
-    def _pjsk_unfavorite_key(keyword: str) -> str | None:
+    def _pjsk_unfavorite_key(
+        keyword: str,
+        favorites: Sequence[FavoriteEntry] = (),
+    ) -> str | None:
         """Return the favorite key matching a PJSK selector such as 「sk 206」.
 
         Both 「sk」 and the older 「pjsk」 spelling are accepted, and the marker is
         only dropped when a selector really follows it, so a meme trigger that
-        happens to start with those letters keeps working.
+        happens to start with those letters keeps working. A bare 序号 first
+        matches an entry still stored under the retired numbering, so the few
+        收藏 that could not be migrated stay removable by the 序号 the 收藏夹
+        prints for them.
         """
         text = str(keyword or "").strip()
         for prefix in PJSK_KEYWORD_PREFIXES:
@@ -679,10 +702,14 @@ class MemeForgePlugin(Star):
         text = text.lstrip(": ：").strip()
         if not text:
             return None
+        if text.isdigit():
+            legacy_key = f"{PJSK_KEY_PREFIX}{int(text)}"
+            if any(entry.key == legacy_key for entry in favorites):
+                return legacy_key
         selection = pjsk_catalog.parse_selector(text)
         if selection is None or selection.sticker is None:
             return None
-        return f"{PJSK_KEY_PREFIX}{selection.sticker.index}"
+        return f"{PJSK_KEY_PREFIX}{selection.sticker.token}"
 
     @staticmethod
     def _favorite_storage_key(event: AstrMessageEvent) -> str:
@@ -802,9 +829,51 @@ class MemeForgePlugin(Star):
             "请确认引用的是本插件近期发送的 meme。"
         )
 
+    @staticmethod
+    def _migrate_favorites(favorites: list[FavoriteEntry]) -> list[FavoriteEntry]:
+        """Rewrite PJSK favorites saved under the retired 序号 numbering.
+
+        The 底图 library was rebuilt on a newer upstream fork, so a stored 序号
+        would now resolve to a different picture. Everything the legacy table
+        can place is rewritten to the stable token form; the rest is left alone
+        so the 收藏夹 can report it as 已失效 instead of guessing.
+        """
+        migrated: list[FavoriteEntry] = []
+        changed = False
+        for entry in favorites:
+            if not entry.key.startswith(PJSK_KEY_PREFIX):
+                migrated.append(entry)
+                continue
+            token = entry.key[len(PJSK_KEY_PREFIX) :]
+            sticker = (
+                pjsk_catalog.sticker_by_legacy_index(int(token))
+                if token.isdigit()
+                else None
+            )
+            if sticker is None:
+                migrated.append(entry)
+                continue
+            changed = True
+            migrated.append(
+                FavoriteEntry(
+                    key=f"{PJSK_KEY_PREFIX}{sticker.token}",
+                    trigger=entry.trigger,
+                )
+            )
+        if not changed:
+            return favorites
+        seen: set[str] = set()
+        unique: list[FavoriteEntry] = []
+        for entry in migrated:
+            if entry.key in seen:
+                continue
+            seen.add(entry.key)
+            unique.append(entry)
+        return unique
+
     async def _load_favorites(self, event: AstrMessageEvent) -> list[FavoriteEntry]:
         raw = await self.get_kv_data(self._favorite_storage_key(event), [])
-        return normalize_favorites(raw)
+        return self._migrate_favorites(normalize_favorites(raw))
 
     async def _save_favorites(
         self,
@@ -1074,18 +1143,23 @@ class MemeForgePlugin(Star):
                 timeout=20,
             )
         )
+        pjsk_revision_task = asyncio.create_task(
+            asyncio.wait_for(fetch_pjsk_sticker_revision(), timeout=20)
+        )
         (
             latest_engine,
             latest_extension,
             extension_status,
             latest_gouqi,
             gouqi_status,
+            latest_pjsk,
         ) = await asyncio.gather(
             engine_task,
             extension_task,
             status_task,
             gouqi_revision_task,
             gouqi_status_task,
+            pjsk_revision_task,
             return_exceptions=True,
         )
         for result in (
@@ -1094,6 +1168,7 @@ class MemeForgePlugin(Star):
             extension_status,
             latest_gouqi,
             gouqi_status,
+            latest_pjsk,
         ):
             if isinstance(result, asyncio.CancelledError):
                 raise result
@@ -1230,11 +1305,27 @@ class MemeForgePlugin(Star):
                 [
                     f"- 底图：{pjsk_status.images}/{pjsk_status.expected_images}",
                     f"- 状态：{pjsk_state}",
-                    f"- 已审阅底图：{self.pjsk_assets.STICKER_COMMIT[:12]}（MIT）",
-                    f"- 已审阅字体：{self.pjsk_assets.FONT_COMMIT[:12]}（MIT）",
-                    "- 素材按需下载到数据目录，不随插件更新。",
                 ]
             )
+        reviewed_pjsk = self.pjsk_assets.STICKER_COMMIT
+        lines.extend(
+            [
+                f"- 已审阅底图：{reviewed_pjsk[:12]}（MIT）",
+                f"- 已审阅字体：{self.pjsk_assets.FONT_COMMIT[:12]}（MIT）",
+            ]
+        )
+        if isinstance(latest_pjsk, BaseException):
+            logger.warning("[meme_forge] 检查 PJSK 底图上游提交失败: %s", latest_pjsk)
+            lines.append(
+                f"- 上游最新提交：检查失败（{format_check_error(latest_pjsk)}）"
+            )
+        else:
+            lines.append(f"- 上游最新提交：{latest_pjsk.short_commit}")
+            if latest_pjsk.commit != reviewed_pjsk:
+                lines.append(
+                    "- 提示：上游底图有未审阅改动，需等待 Meme 工坊适配后更新。"
+                )
+        lines.append("- 素材按需下载到数据目录，不随插件更新。")
 
         lines.extend(
             [
@@ -1565,7 +1656,7 @@ class MemeForgePlugin(Star):
         action = "已收藏" if is_new else "已在收藏夹中，并移到最前"
         lines = [
             f"{action}：{record.trigger}（key: {record.key}）",
-            f"下次可用：{self._format_trigger_command(record.trigger)}",
+            f"下次可用：{self._favorite_command(record.key, record.trigger)}",
         ]
         if len(evicted) == 1:
             removed = evicted[0]
@@ -1636,7 +1727,7 @@ class MemeForgePlugin(Star):
                         None,
                     )
                 if key is None:
-                    key = self._pjsk_unfavorite_key(selector)
+                    key = self._pjsk_unfavorite_key(selector, favorites)
                 if key is None:
                     result_message = f"没有找到 meme：{keyword}"
                 else:
@@ -1812,7 +1903,7 @@ class MemeForgePlugin(Star):
         return (
             f"PJSK 素材还没装好（底图 {status.images}/{status.expected_images}，"
             f"字体{font_state}）。\n"
-            "请管理员执行 /sk素材安装 确认，首次安装需联网下载约 30 MB。"
+            "请管理员执行 /sk素材安装 确认，首次安装需联网下载约 65 MB。"
         )
 
     async def _pjsk_sheet(
@@ -1951,7 +2042,7 @@ class MemeForgePlugin(Star):
         image: bytes,
     ) -> None:
         """Feed one rendered sticker into 收藏 / 最近 / 使用记录。"""
-        record = SimpleNamespace(key=f"{PJSK_KEY_PREFIX}{sticker.index}")
+        record = SimpleNamespace(key=f"{PJSK_KEY_PREFIX}{sticker.token}")
         trigger = f"pjsk {sticker.index}"
         self._remember_meme(event, record, trigger)
         await self._remember_generated_output(
@@ -2151,7 +2242,7 @@ class MemeForgePlugin(Star):
         },
     )
     async def pjsk_random_command(self, event: AstrMessageEvent):
-        """从 359 张底图里随机抽一张并配上文字。"""
+        """从整个 PJSK 底图库里随机抽一张并配上文字。"""
         event.stop_event()
         reason = await self._pjsk_block_reason()
         if reason is not None:
@@ -2196,10 +2287,11 @@ class MemeForgePlugin(Star):
         event.stop_event()
         if self._command_arg(event) != "确认":
             yield event.plain_result(
-                "PJSK 底图来自 TheOriginalAyaka/sekai-stickers，手写字体来自 "
+                "PJSK 底图来自 laffylaffyla/sekai-stickers（TheOriginalAyaka/"
+                "sekai-stickers 的活跃分支），手写字体来自 "
                 "Agnes4m/nonebot_plugin_pjsk，两者均为 MIT 许可；角色形象版权仍归 "
                 "SEGA / Colorful Palette，请只在同人二创允许的范围内使用。\n"
-                "安装会下载约 30 MB 素材到插件数据目录，不随插件更新。\n"
+                "安装会下载约 65 MB 素材到插件数据目录，不随插件更新。\n"
                 "请使用 /sk素材安装 确认 继续。"
             )
             return
@@ -2282,7 +2374,7 @@ class MemeForgePlugin(Star):
         if status.installed_at:
             lines.append(f"安装时间：{status.installed_at}")
         if not status.ready:
-            lines.append("管理员可执行 /sk素材安装 确认 下载素材（约 30 MB）。")
+            lines.append("管理员可执行 /sk素材安装 确认 下载素材（约 65 MB）。")
         yield event.plain_result("\n".join(lines))
 
     @filter.event_message_type(EventMessageType.ALL)
