@@ -784,6 +784,7 @@ class MemeDashboard:
         characters = [
             {
                 "key": character.key,
+                "number": character.number,
                 "name": character.name_zh,
                 "display_name": character.display_name,
                 "color": character.color,

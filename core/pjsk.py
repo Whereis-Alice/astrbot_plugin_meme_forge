@@ -777,7 +777,7 @@ def _render_grouped_sheet(
         _label(
             draw,
             (content_left + 162, top + 10),
-            f"序号 {character.range_label} · {character.key}",
+            f"角色 {character.number} · 表情序号 {character.range_label} · {character.key}",
             meta_font,
             SHEET_MUTED,
             inner - 172,
@@ -807,20 +807,22 @@ def render_character_sheet(image_root: Path) -> bytes:
     cells = [
         PjskSheetCell(
             path=sticker_path(image_root, catalog.character_stickers(character)[0]),
-            title=character.range_label,
-            subtitle=character.display_name,
+            title=str(character.number),
+            subtitle=f"{character.display_name} {character.range_label}",
             accent=character.color,
         )
         for character in catalog.characters()
     ]
     return _render_sheet(
         "PJSK 表情工坊 · 角色总览",
-        f"{len(cells)} 位角色 · {catalog.IMAGE_COUNT} 张底图，先认区间再挑单张",
+        f"{len(cells)} 位角色 · {catalog.IMAGE_COUNT} 张底图 ·"
+        " 大号数字是角色号，名字后面的区间是表情序号",
         cells,
         columns=6,
         thumb=(176, 152),
         footer=(
-            "下一步：/sk表情 未来 → 看单张序号 ｜ /sk 206 你好呀 → 直接出图"
+            "下一步：/sk角色 16 → 看这位角色的表情序号 ｜"
+            " /sk 206 你好呀 → 直接出图（也可写 /sk角色 未来）"
         ),
     )
 
@@ -841,12 +843,17 @@ def render_character_stickers_sheet(
         for sticker in items
     ]
     return _render_sheet(
-        f"PJSK · {character.display_name}",
-        f"{len(cells)} 张底图 · 序号 {character.range_label} · 别名 {character.key}",
+        f"PJSK · {character.number}. {character.display_name}",
+        f"角色 {character.number}/{catalog.character_count()} ·"
+        f" {len(cells)} 张底图 · 表情序号 {character.range_label}"
+        f" · 别名 {character.key}",
         cells,
         columns=4 if len(cells) <= 12 else 5,
         thumb=(220, 190),
-        footer=f"用法：/sk {items[0].index} 你想说的话 （可加 -c 弧形、-s 字号）",
+        footer=(
+            f"用法：/sk {items[0].index} 你想说的话（可加 -c 弧形、-s 字号）"
+            " ｜ 图上的数字是表情序号，不是角色号"
+        ),
     )
 
 
@@ -854,8 +861,8 @@ def render_all_stickers_sheet(image_root: Path) -> bytes:
     """Draw the full 359-sticker contact sheet, grouped by character."""
     return _render_grouped_sheet(
         "PJSK 表情工坊 · 全部底图",
-        f"{catalog.IMAGE_COUNT} 张底图按角色分组，数字即 /sk 序号",
+        f"{catalog.IMAGE_COUNT} 张底图按角色分组，图下的数字即 /sk 用的表情序号",
         image_root,
         thumb=(76, 66),
-        footer="太长可改用 /sk表情 <角色> 只看一位角色",
+        footer="太长可改用 /sk角色 <角色号或角色名> 只看一位角色",
     )

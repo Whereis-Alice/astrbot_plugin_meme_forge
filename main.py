@@ -42,6 +42,7 @@ from .core.maker import (
 )
 from .core.pjsk_assets import PjskAssetError, PjskAssetManager
 from .core.pjsk_command import (
+    CHARACTER_TOKENS,
     HELP_TOKENS,
     RANDOM_TOKENS,
     SHEET_TOKENS,
@@ -1845,8 +1846,8 @@ class MemeForgePlugin(Star):
             selection = pjsk_catalog.parse_selector(text)
             if selection is None:
                 return None, (
-                    f"认不出「{text}」。直接发送 /sk表情 看角色总览，"
-                    "或者带上角色名，例如 /sk表情 未来。"
+                    f"认不出「{text}」。直接发送 /sk角色 看角色总览，"
+                    "或者用 /sk角色 16、/sk角色 未来 打开单个角色。"
                 )
             return await self._pjsk_sheet(selection.character), None
         except (PjskAssetError, OSError) as exc:
@@ -1855,6 +1856,50 @@ class MemeForgePlugin(Star):
         except Exception:  # noqa: BLE001 - Pillow surfaces many unrelated errors
             logger.exception("[meme_forge] PJSK 总览图渲染异常")
             return None, "PJSK 总览图生成失败，请查看 AstrBot 日志。"
+
+    @staticmethod
+    def _pjsk_character_hint(text: str) -> str:
+        """Explain the 角色号 namespace when a character selector misses."""
+        total = pjsk_catalog.character_count()
+        cleaned = pjsk_catalog.normalise_token(text)
+        if cleaned.isdigit():
+            number = int(cleaned)
+            if pjsk_catalog.sticker_by_index(number) is not None:
+                return (
+                    f"/sk角色 后面跟的是角色号 1~{total}，{number} 超出范围。\n"
+                    f"如果 {number} 是表情序号，直接用 /sk {number} 你的文字 出图，"
+                    f"或者 /sk表情 {number} 看它属于哪位角色。"
+                )
+            return (
+                f"/sk角色 后面跟的是角色号 1~{total}，{number} 超出范围。\n"
+                "发送 /sk角色 看角色总览图，上面的大号数字就是角色号。"
+            )
+        return (
+            f"认不出角色「{text}」。发送 /sk角色 看总览图，"
+            f"再用 /sk角色 <1~{total}> 或 /sk角色 未来 打开单个角色。"
+        )
+
+    async def _pjsk_character_sheet_for(
+        self,
+        token: str,
+    ) -> tuple[bytes | None, str | None]:
+        """Pick the character page matching one 角色号 or 角色名 token."""
+        text = str(token or "").strip()
+        try:
+            if not text:
+                return await self._pjsk_sheet(), None
+            if text in PJSK_ALL_TOKENS:
+                return await self._pjsk_sheet(everything=True), None
+            character = pjsk_catalog.parse_character_selector(text)
+            if character is None:
+                return None, self._pjsk_character_hint(text)
+            return await self._pjsk_sheet(character), None
+        except (PjskAssetError, OSError) as exc:
+            logger.warning("[meme_forge] PJSK 角色图读取素材失败: %s", exc)
+            return None, "PJSK 素材读取失败，请管理员执行 /sk素材安装 确认。"
+        except Exception:  # noqa: BLE001 - Pillow surfaces many unrelated errors
+            logger.exception("[meme_forge] PJSK 角色图渲染异常")
+            return None, "PJSK 角色图生成失败，请查看 AstrBot 日志。"
 
     async def _render_pjsk(
         self,
@@ -1968,13 +2013,11 @@ class MemeForgePlugin(Star):
         alias={
             "sk列表",
             "sk菜单",
-            "sk角色",
             "SK表情",
             "SK列表",
             "pjsk表情",
             "pjsk列表",
             "pjsk菜单",
-            "pjsk角色",
             "PJSK表情",
             "PJSK列表",
         },
@@ -1993,6 +2036,33 @@ class MemeForgePlugin(Star):
         image, error = await self._pjsk_sheet_for(selector or "")
         if error is not None or image is None:
             yield event.plain_result(error or "PJSK 总览图生成失败。")
+            return
+        yield event.chain_result([Comp.Image.fromBytes(image)])
+
+    @filter.command(
+        "sk角色",
+        alias={
+            "sk角色表",
+            "SK角色",
+            "pjsk角色",
+            "pjsk角色表",
+            "PJSK角色",
+        },
+    )
+    async def pjsk_character_command(
+        self,
+        event: AstrMessageEvent,
+        selector: str | None = None,
+    ):
+        """按角色号或角色名翻开一位角色，看清每张底图的表情序号。"""
+        event.stop_event()
+        reason = await self._pjsk_block_reason()
+        if reason is not None:
+            yield event.plain_result(reason)
+            return
+        image, error = await self._pjsk_character_sheet_for(selector or "")
+        if error is not None or image is None:
+            yield event.plain_result(error or "PJSK 角色图生成失败。")
             return
         yield event.chain_result([Comp.Image.fromBytes(image)])
 
@@ -2028,6 +2098,14 @@ class MemeForgePlugin(Star):
             image, error = await self._pjsk_sheet_for(" ".join(args).strip())
             if error is not None or image is None:
                 yield event.plain_result(error or "PJSK 总览图生成失败。")
+                return
+            yield event.chain_result([Comp.Image.fromBytes(image)])
+            return
+        if token in CHARACTER_TOKENS:
+            follow_up = " ".join(args).strip()
+            image, error = await self._pjsk_character_sheet_for(follow_up)
+            if error is not None or image is None:
+                yield event.plain_result(error or "PJSK 角色图生成失败。")
                 return
             yield event.chain_result([Comp.Image.fromBytes(image)])
             return
@@ -2170,7 +2248,8 @@ class MemeForgePlugin(Star):
             return
         yield event.plain_result(
             f"PJSK 素材已就绪：{status.images} 张底图 + 手写字体。\n"
-            "先发送 /sk表情 看角色总览，再用 /sk 序号 文字 出图。"
+            "先发送 /sk角色 看角色号，再 /sk角色 <角色号> 查表情序号，"
+            "最后 /sk <表情序号> 文字 出图。"
         )
 
     @filter.command(

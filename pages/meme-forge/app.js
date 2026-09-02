@@ -1798,7 +1798,8 @@ function renderPjskCharacters() {
     name.appendChild(dot);
     name.appendChild(el("span", null, item.name || item.key));
     copy.appendChild(name);
-    copy.appendChild(el("small", "mono", item.key + " · " + (item.range_label || "")));
+    const tag = item.number ? "角色 " + item.number + " · " : "";
+    copy.appendChild(el("small", "mono", tag + item.key + " · 序号 " + (item.range_label || "")));
     button.appendChild(copy);
     button.appendChild(el("span", "side-flag", item.count + " 张"));
     button.addEventListener("click", () => selectPjskCharacter(item.key));
@@ -1894,7 +1895,9 @@ function renderPjskGrid() {
   const items = pjskGridItems();
   const character = pjskCharacter(state.pjsk.character);
   $("pjsk-picker-meta").textContent = character
-    ? (character.name || character.key) + " · " + items.length + " 张 · 序号 " + (character.range_label || "--")
+    ? (character.name || character.key) +
+      (character.number ? " · 角色 " + character.number : "") +
+      " · " + items.length + " 张 · 表情序号 " + (character.range_label || "--")
     : items.length + " 张";
   $("pjsk-grid-empty").hidden = items.length > 0;
   if (!items.length) return;

@@ -15,6 +15,8 @@ from astrbot_plugin_meme_forge.core.dashboard import DashboardError, MemeDashboa
 from astrbot_plugin_meme_forge.core.imaging import ImageRenderError
 from astrbot_plugin_meme_forge.core.pjsk_assets import PjskAssetError, PjskAssetManager
 from astrbot_plugin_meme_forge.core.pjsk_command import (
+    CHARACTER_TOKENS,
+    SHEET_TOKENS,
     PjskCommandError,
     coerce_options,
     parse_arguments,
@@ -56,7 +58,7 @@ class PjskCatalogTests(unittest.TestCase):
         cursor = 1
         for character in pjsk_catalog.characters():
             self.assertEqual(character.first_index, cursor)
-            self.assertEqual(character.count, len(character.numbers))
+            self.assertEqual(character.count, len(character.sticker_numbers))
             cursor = character.last_index + 1
         self.assertEqual(cursor - 1, pjsk_catalog.IMAGE_COUNT)
 
@@ -78,6 +80,25 @@ class PjskCatalogTests(unittest.TestCase):
             self.assertIsNone(pjsk_catalog.parse_selector(token), token)
         self.assertIsNone(pjsk_catalog.sticker_by_index(0))
         self.assertIsNone(pjsk_catalog.sticker_by_index(pjsk_catalog.IMAGE_COUNT + 1))
+
+    def test_character_numbers_form_their_own_namespace(self) -> None:
+        rows = pjsk_catalog.characters()
+        self.assertEqual(pjsk_catalog.character_count(), len(rows))
+        self.assertEqual([row.number for row in rows], list(range(1, len(rows) + 1)))
+        self.assertEqual(pjsk_catalog.character_by_number(1).key, rows[0].key)
+        self.assertEqual(pjsk_catalog.character_by_number(16).key, "miku")
+        self.assertEqual(pjsk_catalog.character_by_number(len(rows)).key, "tsukasa")
+        for number in (0, -1, len(rows) + 1, pjsk_catalog.IMAGE_COUNT):
+            self.assertIsNone(pjsk_catalog.character_by_number(number), number)
+
+    def test_character_selector_reads_digits_as_the_character_number(self) -> None:
+        for token in ("16", "１６", "#16", " 16 ", "未来", "miku", "MIKU", "未来3"):
+            character = pjsk_catalog.parse_character_selector(token)
+            self.assertIsNotNone(character, token)
+            self.assertEqual(character.key, "miku", token)
+        self.assertEqual(pjsk_catalog.parse_character_selector("3").key, "an")
+        for token in ("", "0", "27", "999", "nope", "未来99"):
+            self.assertIsNone(pjsk_catalog.parse_character_selector(token), token)
 
     def test_labels_stay_human_readable(self) -> None:
         sticker = pjsk_catalog.sticker_by_index(206)
@@ -140,9 +161,17 @@ class PjskArgumentTests(unittest.TestCase):
 
     def test_help_block_points_at_both_steps(self) -> None:
         text = "\n".join(usage_lines())
+        self.assertIn("/sk角色", text)
         self.assertIn("/sk表情", text)
         self.assertIn("/sk 206", text)
+        self.assertIn("角色号", text)
+        self.assertIn("表情序号", text)
         self.assertIn("/pjsk", text)
+
+    def test_sheet_and_character_sub_commands_stay_separate(self) -> None:
+        self.assertIn("表情", SHEET_TOKENS)
+        self.assertIn("角色", CHARACTER_TOKENS)
+        self.assertFalse(SHEET_TOKENS & CHARACTER_TOKENS)
 
 
 class PjskRenderTests(unittest.TestCase):
@@ -328,6 +357,68 @@ class PjskFavoriteCommandTests(unittest.TestCase):
         )
 
 
+class PjskCharacterSheetTests(unittest.IsolatedAsyncioTestCase):
+    """/sk角色 turns a 角色号 into one character page, or explains the miss."""
+
+    def setUp(self) -> None:
+        self.plugin = MemeForgePlugin.__new__(MemeForgePlugin)
+        self.rendered: list[object] = []
+
+        async def fake_sheet(character=None, *, everything=False):
+            self.rendered.append("all" if everything else character)
+            return PNG_BYTES
+
+        self.plugin._pjsk_sheet = fake_sheet
+
+    async def test_number_name_and_alias_all_open_the_same_page(self) -> None:
+        for token in ("16", "１６", "#16", "未来", "miku", "未来3"):
+            with self.subTest(token=token):
+                self.rendered.clear()
+                image, error = await self.plugin._pjsk_character_sheet_for(token)
+                self.assertIsNone(error)
+                self.assertEqual(image, PNG_BYTES)
+                self.assertEqual(self.rendered[0].key, "miku")
+
+    async def test_no_argument_shows_the_overview(self) -> None:
+        image, error = await self.plugin._pjsk_character_sheet_for("")
+        self.assertIsNone(error)
+        self.assertEqual(image, PNG_BYTES)
+        self.assertEqual(self.rendered, [None])
+
+    async def test_all_token_still_renders_the_full_wall(self) -> None:
+        image, error = await self.plugin._pjsk_character_sheet_for("全部")
+        self.assertIsNone(error)
+        self.assertEqual(image, PNG_BYTES)
+        self.assertEqual(self.rendered, ["all"])
+
+    async def test_a_sticker_number_is_explained_instead_of_guessed(self) -> None:
+        image, error = await self.plugin._pjsk_character_sheet_for("206")
+        self.assertIsNone(image)
+        self.assertIn("角色号 1~26", error)
+        self.assertIn("/sk 206", error)
+        self.assertIn("/sk表情 206", error)
+        self.assertEqual(self.rendered, [])
+
+    async def test_out_of_range_and_unknown_tokens_get_their_own_hint(self) -> None:
+        image, far = await self.plugin._pjsk_character_sheet_for("999")
+        self.assertIsNone(image)
+        self.assertIn("角色号 1~26", far)
+        self.assertIn("角色总览图", far)
+        image, unknown = await self.plugin._pjsk_character_sheet_for("nope")
+        self.assertIsNone(image)
+        self.assertIn("认不出角色", unknown)
+        self.assertEqual(self.rendered, [])
+
+    async def test_missing_artwork_points_at_the_install_command(self) -> None:
+        async def explode(character=None, *, everything=False):
+            raise PjskAssetError("没装素材")
+
+        self.plugin._pjsk_sheet = explode
+        image, error = await self.plugin._pjsk_character_sheet_for("16")
+        self.assertIsNone(image)
+        self.assertIn("sk素材安装", error)
+
+
 def asset_stub(root: Path, **overrides: object) -> SimpleNamespace:
     """Stand in for PjskAssetManager without touching the network."""
     state = {
@@ -410,7 +501,10 @@ class PjskDashboardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["output_scale"], 2)
         first = payload["characters"][0]
         self.assertEqual(first["first_index"], 1)
+        self.assertEqual(first["number"], 1)
         self.assertIn("range_label", first)
+        miku = payload["characters"][15]
+        self.assertEqual((miku["key"], miku["number"]), ("miku", 16))
         sticker = payload["items"][205]
         self.assertEqual(sticker["index"], 206)
         self.assertEqual(sticker["character"], "miku")

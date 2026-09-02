@@ -23,7 +23,9 @@ from .pjsk import (
 )
 
 #: Sub-commands accepted in place of a selector, so /sk 表情 works too.
-SHEET_TOKENS = frozenset({"表情", "表情包", "列表", "菜单", "角色", "list", "menu"})
+SHEET_TOKENS = frozenset({"表情", "表情包", "列表", "菜单", "list", "menu"})
+#: Sub-commands that open the character index, so /sk 角色 3 works too.
+CHARACTER_TOKENS = frozenset({"角色", "角色表", "character", "char"})
 #: Tokens that ask for one random sticker.
 RANDOM_TOKENS = frozenset({"随机", "随机表情", "抽一张", "random"})
 #: Tokens that ask for the usage guide.
@@ -208,7 +210,8 @@ def resolve_target(words: Sequence[str]) -> PjskTarget:
     selection = catalog.parse_selector(items[0])
     if selection is None:
         raise PjskCommandError(
-            f"认不出「{items[0]}」。发送 /sk表情 查看序号总览，"
+            f"认不出「{items[0]}」。发送 /sk角色 看角色号，"
+            f"再用 /sk角色 <角色号> 查表情序号（1~{catalog.IMAGE_COUNT}），"
             "也可以用角色名加编号，例如 未来3 或 miku3。"
         )
     character = selection.character
@@ -243,10 +246,20 @@ def usage_lines() -> tuple[str, ...]:
     """Help block shown by /sk帮助 and by /sk without arguments."""
     spacing = f"{_format_bound(MIN_LINE_SPACING)}~{_format_bound(MAX_LINE_SPACING)}"
     return (
-        "PJSK 表情工坊：先看图选序号，再配文字。",
-        "1. /sk表情 → 角色总览图（26 位角色与序号区间）",
-        "2. /sk表情 未来 → 该角色全部姿势的缩略图",
+        "PJSK 表情工坊：先按角色号翻角色，再按表情序号配文字。",
+        (
+            f"1. /sk角色 → 角色总览图（{catalog.character_count()} 位角色，"
+            "大号数字就是角色号）"
+        ),
+        (
+            "2. /sk角色 16 → 翻开 16 号角色，看每张底图的表情序号"
+            "（也可写 /sk角色 未来）"
+        ),
         "3. /sk 206 Wonderhoy → 生成表情包",
+        (
+            f"两种数字别混：/sk角色 用角色号 1~{catalog.character_count()}，"
+            f"/sk 与 /sk表情 用表情序号 1~{catalog.IMAGE_COUNT}。"
+        ),
         "选择方式：序号 206、角色加编号 未来3 / miku3、只写角色名则随机一张。",
         "可选参数：",
         f"  -x 横向 0~{catalog.CANVAS_WIDTH}    -y 纵向 0~{catalog.CANVAS_HEIGHT}",
@@ -255,6 +268,9 @@ def usage_lines() -> tuple[str, ...]:
         "示例：/sk 未来3 早上好 -s 34 -r 2 -c",
         r"文字中的 \n 会换行。",
         f"单次文字最多 {MAX_TEXT_LINES} 行、{MAX_TEXT_LENGTH} 字。",
-        "其他：/sk随机 随机一张，/sk素材状态 查看素材。",
-        "旧写法 /pjsk、/pjsk表情 等仍然可用。",
+        (
+            "其他：/sk表情 全部 看整张底图墙，/sk随机 随机一张，"
+            "/sk素材状态 查看素材。"
+        ),
+        "旧写法 /pjsk、/pjsk角色、/pjsk表情 等仍然可用。",
     )

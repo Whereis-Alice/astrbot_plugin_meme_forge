@@ -108,13 +108,15 @@ class PjskCharacter:
     stem: str
     name_zh: str
     color: str
-    numbers: tuple[str, ...]
+    sticker_numbers: tuple[str, ...]
     aliases: tuple[str, ...]
+    #: 1-based position in the catalogue, typed as the 角色号 in /sk角色.
+    number: int
     first_index: int
 
     @property
     def count(self) -> int:
-        return len(self.numbers)
+        return len(self.sticker_numbers)
 
     @property
     def last_index(self) -> int:
@@ -181,8 +183,9 @@ def characters() -> tuple[PjskCharacter, ...]:
     """Return all 26 characters in catalogue order."""
     built: list[PjskCharacter] = []
     cursor = 1
-    for key, folder, stem, name_zh, color, extra, aliases in _ROWS:
-        numbers = BASE_NUMBERS + EXTRA_NUMBERS[:extra]
+    for number, row in enumerate(_ROWS, start=1):
+        key, folder, stem, name_zh, color, extra, aliases = row
+        sticker_numbers = BASE_NUMBERS + EXTRA_NUMBERS[:extra]
         built.append(
             PjskCharacter(
                 key=key,
@@ -190,12 +193,13 @@ def characters() -> tuple[PjskCharacter, ...]:
                 stem=stem,
                 name_zh=name_zh,
                 color=color,
-                numbers=numbers,
+                sticker_numbers=sticker_numbers,
                 aliases=tuple(aliases),
+                number=number,
                 first_index=cursor,
             )
         )
-        cursor += len(numbers)
+        cursor += len(sticker_numbers)
     return tuple(built)
 
 
@@ -204,7 +208,7 @@ def stickers() -> tuple[PjskSticker, ...]:
     """Return every sticker with its global 1-based index assigned."""
     built: list[PjskSticker] = []
     for character in characters():
-        for offset, number in enumerate(character.numbers):
+        for offset, number in enumerate(character.sticker_numbers):
             index = character.first_index + offset
             x, y, rotate, font_size = GEOMETRY_OVERRIDES.get(index, DEFAULT_GEOMETRY)
             built.append(
@@ -257,6 +261,19 @@ def find_character(token: str) -> PjskCharacter | None:
     return _alias_index().get(normalise_token(token))
 
 
+def character_count() -> int:
+    """How many characters the catalogue holds (the 角色号 upper bound)."""
+    return len(characters())
+
+
+def character_by_number(number: int) -> PjskCharacter | None:
+    """Look up one character by the 1-based 角色号 shown on the overview."""
+    rows = characters()
+    if number < 1 or number > len(rows):
+        return None
+    return rows[number - 1]
+
+
 def character_stickers(character: PjskCharacter) -> tuple[PjskSticker, ...]:
     """Return the stickers owned by one character, in catalogue order."""
     return stickers()[character.first_index - 1 : character.last_index]
@@ -289,3 +306,18 @@ def parse_selector(token: str) -> PjskSelection | None:
 
     character = find_character(cleaned)
     return PjskSelection(character, None) if character else None
+
+
+def parse_character_selector(token: str) -> PjskCharacter | None:
+    """Parse one 角色 selector: 3, 未来, miku or 未来3 all reach 初音未来.
+
+    Digits are read as the 角色号 printed on the overview sheet, which is a
+    separate namespace from the sticker 序号 used by ``/sk``.
+    """
+    cleaned = normalise_token(token)
+    if not cleaned:
+        return None
+    if cleaned.isdigit():
+        return character_by_number(int(cleaned))
+    selection = parse_selector(cleaned)
+    return None if selection is None else selection.character
