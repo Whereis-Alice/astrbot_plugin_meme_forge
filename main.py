@@ -17,7 +17,7 @@ from astrbot.core.star.filter.event_message_type import EventMessageType
 from quart import jsonify, request
 
 from .core import pjsk, pjsk_catalog
-from .core.arguments import strip_trigger_prefix
+from .core.arguments import command_tokens, strip_trigger_prefix
 from .core.collector import InputCollectionError, ParamsCollector
 from .core.dashboard import DashboardError, MemeDashboard
 from .core.engine import MemeEngine, MemeEngineError, MemeGenerationError
@@ -127,6 +127,23 @@ class MemeForgePlugin(Star):
                 return self.config[key]
             except (KeyError, TypeError):
                 return default
+
+    @staticmethod
+    def _command_args(event: AstrMessageEvent) -> tuple[str, ...]:
+        """指令参数一律从原始消息里取，不靠 AstrBot 的形参注入。
+
+        核心是按关键字调用处理器的，``*args`` 形参会被当成具名参数注入而直接报
+        ``TypeError``；纯数字参数还会被核心悄悄转成 ``int``。所以本插件的指令处理器
+        统一只声明 ``(self, event)``，参数在这里自己解析。详见
+        :func:`core.arguments.command_tail`。
+        """
+        return command_tokens(getattr(event, "message_str", ""))
+
+    @classmethod
+    def _command_arg(cls, event: AstrMessageEvent) -> str:
+        """取第一个参数；没有参数时返回空串。"""
+        tokens = cls._command_args(event)
+        return tokens[0] if tokens else ""
 
     def _history_limit(self) -> int:
         return max(100, min(int(self._config_value("history_limit", 500)), 2_000))
@@ -899,12 +916,9 @@ class MemeForgePlugin(Star):
         yield event.chain_result([Comp.Image.fromBytes(output)])
 
     @filter.command("meme工坊详情", alias={"梗图工坊详情"})
-    async def meme_details(
-        self,
-        event: AstrMessageEvent,
-        keyword: str | None = None,
-    ):
+    async def meme_details(self, event: AstrMessageEvent):
         """查看一个 meme 的图片、文本和选项参数。"""
+        keyword = self._command_arg(event)
         if not keyword:
             yield event.plain_result("请指定 meme 名称或关键词。")
             return
@@ -926,12 +940,9 @@ class MemeForgePlugin(Star):
 
     @filter.command("meme工坊禁用")
     @filter.permission_type(filter.PermissionType.ADMIN)
-    async def disable_meme(
-        self,
-        event: AstrMessageEvent,
-        keyword: str | None = None,
-    ):
+    async def disable_meme(self, event: AstrMessageEvent):
         """禁用一个 meme。"""
+        keyword = self._command_arg(event)
         if not keyword:
             yield event.plain_result("请指定要禁用的 meme。")
             return
@@ -951,12 +962,9 @@ class MemeForgePlugin(Star):
 
     @filter.command("meme工坊启用")
     @filter.permission_type(filter.PermissionType.ADMIN)
-    async def enable_meme(
-        self,
-        event: AstrMessageEvent,
-        keyword: str | None = None,
-    ):
+    async def enable_meme(self, event: AstrMessageEvent):
         """重新启用一个 meme。"""
+        keyword = self._command_arg(event)
         if not keyword:
             yield event.plain_result("请指定要启用的 meme。")
             return
@@ -1241,14 +1249,10 @@ class MemeForgePlugin(Star):
 
     @filter.command("meme工坊扩展安装", alias={"meme工坊扩展更新"})
     @filter.permission_type(filter.PermissionType.ADMIN)
-    async def install_extension(
-        self,
-        event: AstrMessageEvent,
-        confirmation: str | None = None,
-    ):
+    async def install_extension(self, event: AstrMessageEvent):
         """安装或更新 anyliew/meme_emoji 的兼容扩展。"""
         event.stop_event()
-        if confirmation != "确认":
+        if self._command_arg(event) != "确认":
             yield event.plain_result(
                 "该操作会从上游下载约 400+ MB 资源，并临时占用约 1.1 GB 磁盘。"
                 "请使用 /meme工坊扩展安装 确认 继续。"
@@ -1306,14 +1310,10 @@ class MemeForgePlugin(Star):
         },
     )
     @filter.permission_type(filter.PermissionType.ADMIN)
-    async def install_gouqi_extension(
-        self,
-        event: AstrMessageEvent,
-        confirmation: str | None = None,
-    ):
+    async def install_gouqi_extension(self, event: AstrMessageEvent):
         """Install reviewed Gouqi assets without executing upstream Python."""
         event.stop_event()
-        if confirmation != "确认":
+        if self._command_arg(event) != "确认":
             yield event.plain_result(
                 "Gouqi 上游目前未声明开源许可证。仅在你已获得作者及素材使用授权时继续；"
                 "本操作会从原仓库下载约 7 MB 素材，不会执行其中的 Python。"
@@ -1403,17 +1403,14 @@ class MemeForgePlugin(Star):
 
     @filter.command("meme工坊自制新建", alias={"meme自制新建"})
     @filter.permission_type(filter.PermissionType.ADMIN)
-    async def maker_create(
-        self,
-        event: AstrMessageEvent,
-        key: str | None = None,
-        *keywords: str,
-    ):
+    async def maker_create(self, event: AstrMessageEvent):
         """引用图片快速生成一个"底部字幕"自制模板。"""
         if not self._config_value("maker_enabled", True):
             yield event.plain_result("自制模板功能已关闭，请在插件配置中开启 maker_enabled。")
             return
-        template_id = str(key or "").strip()
+        tokens = self._command_args(event)
+        keywords = tokens[1:]
+        template_id = tokens[0] if tokens else ""
         if not template_id:
             yield event.plain_result(
                 "用法：/meme工坊自制新建 模板ID 触发词 [更多触发词]\n"
@@ -1464,13 +1461,9 @@ class MemeForgePlugin(Star):
 
     @filter.command("meme工坊自制删除", alias={"meme自制删除"})
     @filter.permission_type(filter.PermissionType.ADMIN)
-    async def maker_delete(
-        self,
-        event: AstrMessageEvent,
-        key: str | None = None,
-    ):
+    async def maker_delete(self, event: AstrMessageEvent):
         """删除一个自制 Meme 模板及其素材。"""
-        template_id = str(key or "").strip()
+        template_id = self._command_arg(event)
         if not template_id:
             yield event.plain_result("用法：/meme工坊自制删除 模板ID")
             return
@@ -1495,14 +1488,10 @@ class MemeForgePlugin(Star):
         yield event.plain_result(f"已重新加载 {loaded} 个自制模板。")
 
     @filter.command("meme工坊提取", alias={"meme提取", "提取meme"})
-    async def extract_meme(
-        self,
-        event: AstrMessageEvent,
-        send_mode: str | None = None,
-    ):
+    async def extract_meme(self, event: AstrMessageEvent):
         """Extract message images, optionally forcing image or file delivery."""
         event.stop_event()
-        mode_text = str(send_mode or "").strip()
+        mode_text = self._command_arg(event)
         selected_mode = self.grabber.command_send_mode(mode_text)
         if mode_text and selected_mode is None:
             yield event.plain_result(
@@ -1603,12 +1592,12 @@ class MemeForgePlugin(Star):
         yield event.plain_result("\n".join(lines))
 
     @filter.command("meme工坊取消收藏", alias={"meme取消收藏"})
-    async def unfavorite_meme(
-        self,
-        event: AstrMessageEvent,
-        keyword: str | None = None,
-    ):
+    async def unfavorite_meme(self, event: AstrMessageEvent):
         """Remove one meme from the current user's favorites."""
+        tokens = self._command_args(event)
+        keyword = tokens[0] if tokens else ""
+        # 「sk 206」这类 PJSK 选择器是两个 token，所以整串也留一份给下面用。
+        selector = " ".join(tokens)
         if not keyword:
             yield event.plain_result("请指定要取消收藏的 meme 触发词。")
             return
@@ -1630,7 +1619,7 @@ class MemeForgePlugin(Star):
                         None,
                     )
                 if key is None:
-                    key = self._pjsk_unfavorite_key(keyword)
+                    key = self._pjsk_unfavorite_key(selector)
                 if key is None:
                     result_message = f"没有找到 meme：{keyword}"
                 else:
@@ -2022,18 +2011,14 @@ class MemeForgePlugin(Star):
             "PJSK列表",
         },
     )
-    async def pjsk_sheet_command(
-        self,
-        event: AstrMessageEvent,
-        selector: str | None = None,
-    ):
+    async def pjsk_sheet_command(self, event: AstrMessageEvent):
         """看图选序号：角色总览、单角色全姿势或全部底图。"""
         event.stop_event()
         reason = await self._pjsk_block_reason()
         if reason is not None:
             yield event.plain_result(reason)
             return
-        image, error = await self._pjsk_sheet_for(selector or "")
+        image, error = await self._pjsk_sheet_for(self._command_arg(event))
         if error is not None or image is None:
             yield event.plain_result(error or "PJSK 总览图生成失败。")
             return
@@ -2049,18 +2034,14 @@ class MemeForgePlugin(Star):
             "PJSK角色",
         },
     )
-    async def pjsk_character_command(
-        self,
-        event: AstrMessageEvent,
-        selector: str | None = None,
-    ):
+    async def pjsk_character_command(self, event: AstrMessageEvent):
         """按角色号或角色名翻开一位角色，看清每张底图的表情序号。"""
         event.stop_event()
         reason = await self._pjsk_block_reason()
         if reason is not None:
             yield event.plain_result(reason)
             return
-        image, error = await self._pjsk_character_sheet_for(selector or "")
+        image, error = await self._pjsk_character_sheet_for(self._command_arg(event))
         if error is not None or image is None:
             yield event.plain_result(error or "PJSK 角色图生成失败。")
             return
@@ -2078,15 +2059,12 @@ class MemeForgePlugin(Star):
             "pjsk贴纸",
         },
     )
-    async def pjsk_sticker_command(
-        self,
-        event: AstrMessageEvent,
-        selector: str | None = None,
-        *args: str,
-    ):
+    async def pjsk_sticker_command(self, event: AstrMessageEvent):
         """按序号或角色名生成一张 PJSK 手写体表情包。"""
         event.stop_event()
-        token = str(selector or "").strip()
+        tokens = self._command_args(event)
+        token = tokens[0] if tokens else ""
+        args = tokens[1:]
         if not token or token in HELP_TOKENS:
             yield event.plain_result("\n".join(usage_lines()))
             return
@@ -2153,14 +2131,14 @@ class MemeForgePlugin(Star):
             "pjsk抽一张",
         },
     )
-    async def pjsk_random_command(self, event: AstrMessageEvent, *args: str):
+    async def pjsk_random_command(self, event: AstrMessageEvent):
         """从 359 张底图里随机抽一张并配上文字。"""
         event.stop_event()
         reason = await self._pjsk_block_reason()
         if reason is not None:
             yield event.plain_result(reason)
             return
-        chain, error = await self._pjsk_random_reply(event, args)
+        chain, error = await self._pjsk_random_reply(event, self._command_args(event))
         if error is not None or chain is None:
             yield event.plain_result(error or "PJSK 表情生成失败。")
             return
@@ -2194,14 +2172,10 @@ class MemeForgePlugin(Star):
         },
     )
     @filter.permission_type(filter.PermissionType.ADMIN)
-    async def install_pjsk_assets(
-        self,
-        event: AstrMessageEvent,
-        confirmation: str | None = None,
-    ):
+    async def install_pjsk_assets(self, event: AstrMessageEvent):
         """下载 PJSK 底图与手写字体（两者均为 MIT 许可）。"""
         event.stop_event()
-        if confirmation != "确认":
+        if self._command_arg(event) != "确认":
             yield event.plain_result(
                 "PJSK 底图来自 TheOriginalAyaka/sekai-stickers，手写字体来自 "
                 "Agnes4m/nonebot_plugin_pjsk，两者均为 MIT 许可；角色形象版权仍归 "

@@ -107,6 +107,41 @@ def tokenize_arguments(text: str) -> list[str]:
         return normalized.split()
 
 
+def command_tail(message_str: Any) -> str:
+    """返回一条指令消息里“指令名之后”的原始参数串。
+
+    为什么不直接用 AstrBot 的形参注入：
+    AstrBot 在 ``pipeline/process_stage/method/star_request.py`` 里通过
+    ``call_handler(event, handler, **params)`` 调用指令处理器，也就是**只按关键字**传参；
+    而 ``star/filter/command.py`` 的 ``init_handler_md`` 会把 ``self``、``event`` 之后的
+    每一个形参都登记成具名参数——包括 ``*args``（VAR_POSITIONAL）。于是形如
+    ``async def h(self, event, selector=None, *args)`` 的处理器会被调成
+    ``h(event, selector=..., args=...)``，直接抛 ``TypeError``。
+
+    此外 4.26.x 调 ``inspect.signature(handler)``、4.27.x 调
+    ``inspect.signature(handler, eval_str=True)``；本插件启用了
+    ``from __future__ import annotations``，注解在两个版本里分别是字符串与真实对象，
+    因此 ``GreedyStr`` 之类的注解写法在跨版本时行为不一致。
+
+    结论：所有指令处理器只声明 ``(self, event)``，参数一律从原始消息文本里取。
+    这样在任何核心版本上 ``handler_params`` 都是空字典，既不会被关键字注入，
+    也不会触发“必要参数缺失”，更不会被核心悄悄把纯数字转成 ``int``。
+    """
+    normalized = re.sub(r"\s+", " ", str(message_str or "").strip())
+    if not normalized:
+        return ""
+    _, _, tail = normalized.partition(" ")
+    return tail.strip()
+
+
+def command_tokens(message_str: Any) -> tuple[str, ...]:
+    """把 :func:`command_tail` 的结果按空格切成参数列表（丢弃空串）。"""
+    tail = command_tail(message_str)
+    if not tail:
+        return ()
+    return tuple(token for token in tail.split(" ") if token)
+
+
 def strip_trigger_prefix(text: str, prefix: str) -> str | None:
     normalized = text.strip()
     prefix = prefix.strip()
