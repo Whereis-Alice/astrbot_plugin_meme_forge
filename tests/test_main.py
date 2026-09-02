@@ -55,6 +55,7 @@ class PluginSchemaTests(unittest.TestCase):
         self.assertEqual(config["history_limit"], 500)
         self.assertEqual(config["dashboard_preview_max_mb"], 4)
         self.assertEqual(config["avatar_cache_size"], 20)
+        self.assertTrue(config["transparent_output_as_gif"])
 
 
 class RecentMemeTests(unittest.TestCase):

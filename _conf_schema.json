@@ -94,6 +94,12 @@
     },
     "default": 512
   },
+  "transparent_output_as_gif": {
+    "description": "透明图片改用 GIF 发送",
+    "hint": "QQ 手机端不显示 PNG 的透明像素（透明区域会变成黑块），开启后自动把含透明区域的输出图转成 GIF 发送；不透明图片、GIF 和 JPEG 保持原样。",
+    "type": "bool",
+    "default": true
+  },
   "max_input_image_mb": {
     "description": "单张输入图片上限（MB）",
     "type": "int",

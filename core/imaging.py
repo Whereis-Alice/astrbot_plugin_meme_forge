@@ -1,16 +1,30 @@
 from __future__ import annotations
 
 import io
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
+from PIL import (
+    Image,
+    ImageChops,
+    ImageDraw,
+    ImageFont,
+    ImageOps,
+    UnidentifiedImageError,
+)
 
 MAX_FRAME_PIXELS = 16_000_000
 MAX_TOTAL_FRAME_PIXELS = 32_000_000
 MAX_INPUT_FRAMES = 60
 MAX_OUTPUT_GIF_BYTES = 20 * 1024 * 1024
+
+#: Palette slot reserved for fully transparent pixels in delivered GIFs.
+GIF_TRANSPARENT_INDEX = 255
+#: Alpha at or above this value stays opaque in a binary GIF mask.
+GIF_ALPHA_THRESHOLD = 128
+#: Formats mobile chat clients already render correctly, so they are kept as-is.
+DELIVERY_SAFE_FORMATS = frozenset({"GIF", "JPEG", "JPG", "MPO", "BMP"})
 
 FONT_CANDIDATES = (
     Path("C:/Windows/Fonts/msyh.ttc"),
@@ -134,18 +148,23 @@ def coalesce_gif(
     return next_frames, next_durations
 
 
-def save_gif(frames: Sequence[Image.Image], durations_ms: int | Sequence[int]) -> bytes:
-    """Encode frames as GIF, shrinking until the size limit is met."""
-    if not frames:
-        raise ImageRenderError("没有可编码的 GIF 帧")
-    working = [frame.convert("RGBA") for frame in frames]
-    durations = (
-        [int(durations_ms)] * len(working)
-        if isinstance(durations_ms, int)
-        else [int(value) for value in durations_ms]
-    )
+def _frame_durations(count: int, durations_ms: int | Sequence[int]) -> list[int]:
+    """Expand one shared delay, or normalise a per-frame delay sequence."""
+    if isinstance(durations_ms, int):
+        return [int(durations_ms)] * count
+    return [int(value) for value in durations_ms]
+
+
+def _encode_within_limit(
+    frames: Sequence[Image.Image],
+    durations_ms: Sequence[int],
+    encoder: Callable[[Sequence[Image.Image], Sequence[int]], bytes],
+) -> bytes:
+    """Encode frames, dropping frames then pixels until the size cap is met."""
+    working = list(frames)
+    durations = list(durations_ms)
     for _ in range(8):
-        data = encode_gif(working, durations)
+        data = encoder(working, durations)
         if len(data) <= MAX_OUTPUT_GIF_BYTES:
             return data
         if len(working) > 12:
@@ -157,6 +176,116 @@ def save_gif(frames: Sequence[Image.Image], durations_ms: int | Sequence[int]) -
         size = (max(1, int(width * 0.85)), max(1, int(height * 0.85)))
         working = [frame.resize(size, Image.Resampling.LANCZOS) for frame in working]
     raise ImageRenderError("生成的 GIF 超过 20 MB 安全限制")
+
+
+def save_gif(frames: Sequence[Image.Image], durations_ms: int | Sequence[int]) -> bytes:
+    """Encode frames as GIF, shrinking until the size limit is met."""
+    if not frames:
+        raise ImageRenderError("没有可编码的 GIF 帧")
+    working = [frame.convert("RGBA") for frame in frames]
+    return _encode_within_limit(
+        working,
+        _frame_durations(len(working), durations_ms),
+        encode_gif,
+    )
+
+
+def binary_alpha_frame(frame: Image.Image) -> Image.Image:
+    """Flatten one RGBA frame into a palette frame with binary transparency.
+
+    GIF can only mark a single palette entry as transparent, so alpha is
+    rounded to fully opaque or fully clear. The cleared region is flood-filled
+    before quantisation so it never spends palette slots on colours nobody
+    will see.
+    """
+    rgba = frame.convert("RGBA")
+    opaque = rgba.getchannel("A").point(
+        lambda value: 255 if value >= GIF_ALPHA_THRESHOLD else 0
+    )
+    flattened = Image.new("RGB", rgba.size, (255, 255, 255))
+    flattened.paste(rgba.convert("RGB"), mask=opaque)
+    indexed = flattened.quantize(colors=GIF_TRANSPARENT_INDEX)
+    indexed.paste(GIF_TRANSPARENT_INDEX, mask=ImageChops.invert(opaque))
+    return indexed
+
+
+def encode_transparent_gif(
+    frames: Sequence[Image.Image], durations_ms: Sequence[int]
+) -> bytes:
+    """Encode RGBA frames as a GIF that keeps one fully transparent colour."""
+    indexed = [binary_alpha_frame(frame) for frame in frames]
+    output = io.BytesIO()
+    indexed[0].save(
+        output,
+        format="GIF",
+        save_all=True,
+        append_images=indexed[1:],
+        duration=list(durations_ms),
+        loop=0,
+        disposal=2,
+        optimize=False,
+        transparency=GIF_TRANSPARENT_INDEX,
+    )
+    return output.getvalue()
+
+
+def save_transparent_gif(
+    frames: Sequence[Image.Image], durations_ms: int | Sequence[int]
+) -> bytes:
+    """Encode frames as a transparency-preserving GIF within the size limit."""
+    if not frames:
+        raise ImageRenderError("没有可编码的 GIF 帧")
+    working = [frame.convert("RGBA") for frame in frames]
+    return _encode_within_limit(
+        working,
+        _frame_durations(len(working), durations_ms),
+        encode_transparent_gif,
+    )
+
+
+def has_transparency(data: bytes) -> bool:
+    """Report whether image bytes contain at least one non-opaque pixel."""
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            if image.mode == "P":
+                return "transparency" in image.info
+            bands = image.getbands()
+            position = next(
+                (index for index, band in enumerate(bands) if band in {"A", "a"}),
+                None,
+            )
+            if position is None:
+                return False
+            extrema = image.getextrema()
+            if position >= len(extrema):
+                return False
+            channel = extrema[position]
+            return bool(channel) and channel[0] < 255
+    except (UnidentifiedImageError, OSError, ValueError):
+        return False
+
+
+def to_delivery_bytes(data: bytes) -> bytes:
+    """Re-encode transparent output as GIF so mobile QQ stops blacking it out.
+
+    Bytes that already display correctly — GIF, JPEG, or a fully opaque
+    still — come back untouched, which keeps this conversion idempotent and
+    lossless for every image that does not actually need it.
+    """
+    if not data:
+        return data
+    try:
+        with Image.open(io.BytesIO(data)) as probe:
+            image_format = (probe.format or "").upper()
+    except (UnidentifiedImageError, OSError, ValueError):
+        return data
+    if image_format in DELIVERY_SAFE_FORMATS or not has_transparency(data):
+        return data
+    try:
+        decoded = decode_image(data)
+        return save_transparent_gif(decoded.frames, decoded.durations_ms)
+    except (ImageRenderError, OSError, ValueError):
+        return data
 
 
 def open_static(path: Path) -> Image.Image:

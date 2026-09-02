@@ -34,6 +34,7 @@ from .core.favorites import (
 from .core.gouqi_extension import GouqiExtensionError, GouqiExtensionManager
 from .core.grabber import MemeGrabber, MemeGrabError
 from .core.history import MemeUsageHistory
+from .core.imaging import to_delivery_bytes
 from .core.maker import (
     MakerError,
     MakerStore,
@@ -147,6 +148,21 @@ class MemeForgePlugin(Star):
 
     def _history_limit(self) -> int:
         return max(100, min(int(self._config_value("history_limit", 500)), 2_000))
+
+    async def _delivery_bytes(self, image: bytes) -> bytes:
+        """把带透明区域的输出图转成 GIF，绕开 QQ 手机端的透明像素黑块。
+
+        手机 QQ 不渲染 PNG 的 alpha 通道，透明区域会变成一整块黑色；GIF 用调色板
+        里的一个透明色来表达同样的镂空，手机端就能正常显示。不透明图片、GIF 和
+        JPEG 会原样返回，所以照片类 meme 不会被 GIF 的 256 色调色板拉低画质。
+        """
+        if not self._config_value("transparent_output_as_gif", True):
+            return image
+        try:
+            return await asyncio.to_thread(to_delivery_bytes, image)
+        except Exception:  # noqa: BLE001 - Pillow surfaces many unrelated errors
+            logger.warning("[meme_forge] 透明图转 GIF 失败，按原格式发送")
+            return image
 
     async def _notify(self, event: AstrMessageEvent, text: str) -> None:
         """Send an interim notice right away, independent of the reply pipeline.
@@ -933,6 +949,7 @@ class MemeForgePlugin(Star):
                 f"{self.engine.format_info(meme)}\n\n预览生成失败：{exc}"
             )
             return
+        preview = await self._delivery_bytes(preview)
         await self._remember_generated_output(event, meme, preview, keyword)
         yield event.chain_result(
             [Comp.Plain(self.engine.format_info(meme)), Comp.Image.fromBytes(preview)]
@@ -1670,6 +1687,7 @@ class MemeForgePlugin(Star):
             except (OSError, ValueError) as exc:
                 logger.warning("[meme_forge] 输出图片压缩失败，发送原图: %s", exc)
 
+        image = await self._delivery_bytes(image)
         return image, inputs.options
 
     @filter.command("meme工坊随机", alias={"随机meme"})
@@ -1967,6 +1985,7 @@ class MemeForgePlugin(Star):
         except Exception:  # noqa: BLE001 - Pillow surfaces many unrelated errors
             logger.exception("[meme_forge] PJSK 渲染 %s 异常", sticker.name)
             return None, "PJSK 表情生成失败，请查看 AstrBot 日志。"
+        image = await self._delivery_bytes(image)
         await self._deliver_pjsk(event, sticker, image)
         return image, None
 
