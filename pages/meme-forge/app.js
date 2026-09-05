@@ -2246,7 +2246,8 @@ function bindPjsk() {
   }, 160);
   search.addEventListener("input", filter);
   search.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
+    // 中文输入法用 Enter 上屏候选词，组词途中不能抢走这一下。
+    if (event.isComposing || event.key !== "Enter") return;
     event.preventDefault();
     const index = resolvePjskQuery(search.value);
     if (index === null) {
@@ -2270,8 +2271,16 @@ function bindPjsk() {
   $("pjsk-prev").addEventListener("click", () => stepPjsk(-1));
   $("pjsk-next").addEventListener("click", () => stepPjsk(1));
   $("pjsk-render").addEventListener("click", () => runPjskRender({}));
+  // 配字框：组词途中只更新计数，不去后端重绘预览 —— 否则每敲一个拼音字母
+  // 都会拿"半成品"文本渲一张图，白跑请求还会让预览闪。组词一结束立刻补渲。
   $("pjsk-text").addEventListener("input", (event) => {
     pjsk.text = event.target.value;
+    renderPjskTextMeta();
+    if (event.isComposing) return;
+    schedulePjskRender();
+  });
+  $("pjsk-text").addEventListener("compositionend", () => {
+    pjsk.text = $("pjsk-text").value;
     renderPjskTextMeta();
     schedulePjskRender();
   });
@@ -2662,7 +2671,8 @@ function bindLibrary() {
   }, 220);
   search.addEventListener("input", runSearch);
   search.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
+    // 同上：输入法组词期间的 Enter 是"确认候选"，不是"立即搜索"。
+    if (event.isComposing || event.key !== "Enter") return;
     event.preventDefault();
     lib.query = search.value.trim();
     loadLibrary(true);
@@ -2809,7 +2819,8 @@ function bindOverlays() {
     if (event.target === $("lightbox")) closeLightbox();
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape") return;
+    // 组词途中的 Esc 是"撤掉候选词"，别顺手把灯箱/抽屉一起关了。
+    if (event.isComposing || event.key !== "Escape") return;
     if (!$("lightbox").hidden) {
       closeLightbox();
       return;
