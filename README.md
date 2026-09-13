@@ -92,6 +92,7 @@ apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0
 | 布尔开关 | `/meme 对称 --top` | 也支持 `--top=false`、`--no-top` |
 | 带空格文本 | `/meme 喜报 "今天 放假"` | 引号内作为同一段文本 |
 | 用户头像 | `/meme 摸 @114514` | OneBot 可使用 QQ 号；QQ 官方 Bot 也识别消息链 At、`<@openid>` 和 `<@!openid>` |
+| 零文本模板的图片名 | `/meme 我永远喜欢 "自定义名字"` | `我永远喜欢` 这类模板没有普通文本位，名字来自图片名；也可写 `name="自定义名字"` |
 
 查看某个 meme 可用的图片数、文字数和选项：
 

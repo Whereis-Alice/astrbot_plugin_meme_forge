@@ -425,6 +425,16 @@ class ParamsCollector:
             raise InputCollectionError("；".join(parsed.errors))
 
         options = parsed.options
+        if (
+            params.max_texts == 0
+            and "name" not in runtime_option_names
+            and "name" not in options
+            and parsed.texts
+        ):
+            # Some zero-text memes draw the image label (for example the name in
+            # "我永远喜欢{name}") instead of accepting a normal text segment.
+            options["name"] = " ".join(parsed.texts).strip()
+            parsed.texts.clear()
         image_name_override = str(options["name"]) if "name" in parsed.options else None
         media = await self._collect_message_media(event, options)
         images = media.images

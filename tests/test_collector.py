@@ -184,6 +184,32 @@ class ParamsCollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inputs.images, [("显式名称", b"input-image")])
         self.assertEqual(inputs.options, {})
 
+    async def test_bare_text_labels_zero_text_meme(self) -> None:
+        class ImageOnlyParams:
+            min_images = 1
+            max_images = 1
+            min_texts = 0
+            max_texts = 0
+            default_texts: ClassVar[list[str]] = []
+            options: ClassVar[list[object]] = []
+
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = Path(directory) / "input.png"
+            image_path.write_bytes(b"input-image")
+            collector = ParamsCollector({})
+            try:
+                inputs = await collector.collect(
+                    FakeEvent([Comp.Image(str(image_path))]),
+                    ImageOnlyParams(),
+                    "自定义 名称",
+                )
+            finally:
+                await collector.close()
+
+        self.assertEqual(inputs.images, [("自定义 名称", b"input-image")])
+        self.assertEqual(inputs.texts, [])
+        self.assertEqual(inputs.options, {})
+
     async def test_avatar_cache_hits_and_evicts_least_recently_used(self) -> None:
         collector = ParamsCollector({"avatar_cache_size": 2})
         collector._download_image = AsyncMock(  # type: ignore[method-assign]

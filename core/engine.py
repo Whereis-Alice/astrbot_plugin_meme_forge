@@ -454,6 +454,12 @@ class MemeEngine:
         if specs:
             lines.append("参数:")
             lines.extend(f"- {format_option_spec(spec)}" for spec in specs)
+        runtime_option_names = {
+            str(getattr(option, "name", "")).strip()
+            for option in list(getattr(params, "options", []) or [])
+        }
+        if params.max_texts == 0 and "name" not in runtime_option_names:
+            lines.append("图片名: name=文本；也可以直接写在触发词后")
         tags = self.get_tags(meme)
         if tags:
             lines.append("标签: " + "、".join(tags))

@@ -112,6 +112,22 @@ class MemeEngineTests(unittest.TestCase):
     def test_exact_match_requires_trigger_boundary(self) -> None:
         self.assertIsNone(self.engine.match("奶茶店"))
 
+    def test_zero_text_info_mentions_image_name(self) -> None:
+        params = SimpleNamespace(
+            min_images=1,
+            max_images=1,
+            min_texts=0,
+            max_texts=0,
+            default_texts=[],
+            options=[],
+        )
+        meme = SimpleNamespace(
+            key="zero_text",
+            info=SimpleNamespace(keywords=["零文本"], tags=set(), params=params),
+        )
+
+        self.assertIn("图片名: name=文本", MemeEngine({}).format_info(meme))
+
     def test_extension_key_collision_keeps_existing_meme(self) -> None:
         params = SimpleNamespace(
             min_images=0,
