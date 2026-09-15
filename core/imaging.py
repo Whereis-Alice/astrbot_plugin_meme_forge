@@ -238,6 +238,11 @@ def encode_transparent_gif(
         disposal=2,
         optimize=False,
         transparency=GIF_TRANSPARENT_INDEX,
+        # Some QQ clients use the logical-screen background index when
+        # compositing an animation. Keep it aligned with the transparent slot;
+        # otherwise a standards-compliant GIF can still be painted on an opaque
+        # palette colour by the receiver.
+        background=GIF_TRANSPARENT_INDEX,
     )
     return output.getvalue()
 

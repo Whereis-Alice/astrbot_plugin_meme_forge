@@ -70,6 +70,7 @@ class DeliveryConversionTests(unittest.TestCase):
         with Image.open(io.BytesIO(output)) as image:
             self.assertEqual(image.format, "GIF")
             self.assertEqual(image.info.get("transparency"), 255)
+            self.assertEqual(image.info.get("background"), 255)
             self.assertEqual(getattr(image, "n_frames", 1), 2)
             decoded = image.convert("RGBA")
         self.assertEqual(decoded.getpixel((0, 0))[3], 0)
