@@ -13,6 +13,7 @@ from PIL import Image
 from astrbot_plugin_meme_forge.core import pjsk_catalog
 from astrbot_plugin_meme_forge.core.imaging import (
     has_transparency,
+    save_gif,
     to_delivery_bytes,
 )
 from astrbot_plugin_meme_forge.main import MemeForgePlugin
@@ -57,6 +58,22 @@ def animated_png() -> bytes:
 
 class DeliveryConversionTests(unittest.TestCase):
     """只有真的带透明像素的图才会被重新编码。"""
+
+    def test_local_gif_encoder_uses_stable_transparent_palette_index(self) -> None:
+        first = Image.new("RGBA", (8, 8), (0, 0, 0, 0))
+        first.paste(BODY_COLOUR, (2, 2, 6, 6))
+        second = Image.new("RGBA", (8, 8), (0, 0, 0, 0))
+        second.paste(BODY_COLOUR, (0, 0, 4, 4))
+
+        output = save_gif([first, second], [100, 120])
+
+        with Image.open(io.BytesIO(output)) as image:
+            self.assertEqual(image.format, "GIF")
+            self.assertEqual(image.info.get("transparency"), 255)
+            self.assertEqual(getattr(image, "n_frames", 1), 2)
+            decoded = image.convert("RGBA")
+        self.assertEqual(decoded.getpixel((0, 0))[3], 0)
+        self.assertEqual(decoded.getpixel((4, 4)), BODY_COLOUR)
 
     def test_transparent_still_becomes_a_transparent_gif(self) -> None:
         source = transparent_png()

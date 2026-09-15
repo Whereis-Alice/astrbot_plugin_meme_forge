@@ -183,6 +183,19 @@ def save_gif(frames: Sequence[Image.Image], durations_ms: int | Sequence[int]) -
     if not frames:
         raise ImageRenderError("没有可编码的 GIF 帧")
     working = [frame.convert("RGBA") for frame in frames]
+    has_alpha = any(
+        frame.getchannel("A").getextrema()[0] < 255 for frame in working
+    )
+    if has_alpha:
+        # Pillow's default RGBA-to-GIF encoder is allowed to pick any palette
+        # slot for transparency. Some mobile QQ builds only honour the stable
+        # high-index marker used by encode_transparent_gif(), so route alpha
+        # frames through the explicit delivery-safe encoder.
+        return _encode_within_limit(
+            working,
+            _frame_durations(len(working), durations_ms),
+            encode_transparent_gif,
+        )
     return _encode_within_limit(
         working,
         _frame_durations(len(working), durations_ms),

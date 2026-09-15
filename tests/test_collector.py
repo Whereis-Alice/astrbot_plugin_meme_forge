@@ -9,7 +9,10 @@ from unittest.mock import AsyncMock, call
 
 from astrbot.api import message_components as Comp
 
-from astrbot_plugin_meme_forge.core.collector import ParamsCollector
+from astrbot_plugin_meme_forge.core.collector import (
+    InputCollectionError,
+    ParamsCollector,
+)
 
 
 class Params:
@@ -54,6 +57,47 @@ class FakeEvent:
 
 
 class ParamsCollectorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_image_reader_prefers_local_candidate_over_url(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = Path(directory) / "original.png"
+            image_path.write_bytes(b"transparent-original")
+            component = Comp.Image(
+                str(image_path),
+                path=str(image_path),
+                url="https://example.com/reencoded.png",
+            )
+            collector = ParamsCollector({})
+            collector._decode_image = AsyncMock(  # type: ignore[method-assign]
+                side_effect=[b"transparent-original", b"reencoded"]
+            )
+            try:
+                data = await collector.read_image_component(component)
+            finally:
+                await collector.close()
+
+        self.assertEqual(data, b"transparent-original")
+        collector._decode_image.assert_awaited_once_with(str(image_path))  # type: ignore[attr-defined]
+
+    async def test_image_reader_falls_back_to_url_when_local_file_is_missing(self) -> None:
+        component = Comp.Image(
+            "missing.png",
+            path="missing.png",
+            url="https://example.com/fallback.png",
+        )
+        collector = ParamsCollector({})
+        collector._decode_image = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[InputCollectionError("找不到输入图片"), b"url-image"]
+        )
+        try:
+            data = await collector.read_image_component(component)
+        finally:
+            await collector.close()
+
+        self.assertEqual(data, b"url-image")
+        collector._decode_image.assert_has_awaits(  # type: ignore[attr-defined]
+            [call("missing.png"), call("https://example.com/fallback.png")]
+        )
+
     async def test_reply_image_and_text_precede_avatar_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             reply_path = Path(directory) / "reply.png"

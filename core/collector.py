@@ -266,18 +266,39 @@ class ParamsCollector:
     @staticmethod
     def _image_source(component: Any) -> str:
         return str(
-            getattr(component, "url", None)
-            or getattr(component, "path", None)
+            getattr(component, "path", None)
             or getattr(component, "file", None)
+            or getattr(component, "url", None)
             or ""
         )
 
+    @staticmethod
+    def _image_sources(component: Any) -> list[str]:
+        """Return adapter image candidates, preferring the original local file.
+
+        Chat platforms often expose both a local cache path and a re-encoded
+        CDN URL. The local path is the best chance of keeping alpha channels;
+        the URL remains the fallback when no local candidate is readable.
+        """
+        sources: list[str] = []
+        for attribute in ("path", "file", "url"):
+            source = str(getattr(component, attribute, None) or "").strip()
+            if source and source not in sources:
+                sources.append(source)
+        return sources
+
     async def read_image_component(self, component: Any) -> bytes:
         """Read one AstrBot image component with the configured safety limits."""
-        source = self._image_source(component)
-        if not source:
+        sources = self._image_sources(component)
+        if not sources:
             raise InputCollectionError("引用消息中没有可读取的图片地址")
-        return await self.read_image_source(source)
+        for index, source in enumerate(sources):
+            try:
+                return await self.read_image_source(source)
+            except Exception:
+                if index == len(sources) - 1:
+                    raise
+        raise InputCollectionError("引用消息中没有可读取的图片地址")
 
     async def read_image_source(self, source: str) -> bytes:
         """Read an adapter-provided image source with the configured safety limits."""
