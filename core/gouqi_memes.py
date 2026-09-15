@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
 from .imaging import (
     MAX_FRAME_PIXELS,
@@ -460,6 +460,51 @@ def _render_line_art(context: GouqiRenderContext, root: Path) -> bytes:
     return _save_gif(output, source.durations_ms)
 
 
+def _compose_twist_frame(
+    template: Image.Image,
+    rotated: Image.Image,
+    position: tuple[int, int],
+) -> Image.Image:
+    """Place a possibly transparent input into a Gouqi twist template.
+
+    The twist PNGs have a transparent input slot.  Their RGB channels still
+    contain the original background artwork underneath that slot, so using
+    only alpha compositing leaves a hole whenever the referenced image is
+    transparent.  Restore that hidden artwork *only inside the rotated
+    image's bounds*, then composite the input and the template normally.
+    """
+    template = template.convert("RGBA")
+    rotated = rotated.convert("RGBA")
+    frame = Image.new("RGBA", template.size)
+
+    left, top = position
+    right = left + rotated.width - 1
+    bottom = top + rotated.height - 1
+    bounds = (left, top, right, bottom)
+    region = Image.new("L", template.size, 0)
+    ImageDraw.Draw(region).rectangle(bounds, fill=255)
+
+    # Fill only pixels that are not fully opaque in the template.  The
+    # template is drawn on top afterwards, preserving anti-aliased edges.
+    missing = template.getchannel("A").point(
+        lambda value: 255 if value < 255 else 0
+    )
+    backdrop_mask = ImageChops.multiply(region, missing)
+    template_rgb = template.convert("RGB")
+    has_hidden_artwork = any(
+        ImageChops.multiply(backdrop_mask, template_rgb.getchannel(channel)).getbbox()
+        for channel in "RGB"
+    )
+    if has_hidden_artwork:
+        backdrop = template_rgb.convert("RGBA")
+        backdrop.putalpha(backdrop_mask)
+        frame.alpha_composite(backdrop)
+
+    frame.alpha_composite(rotated, position)
+    frame.alpha_composite(template)
+    return frame
+
+
 def _render_twist(
     context: GouqiRenderContext,
     root: Path,
@@ -485,10 +530,7 @@ def _render_twist(
             round(center[0] - rotated.width / 2),
             round(center[1] - rotated.height / 2),
         )
-        frame = Image.new("RGBA", template.size)
-        frame.alpha_composite(rotated, position)
-        frame.alpha_composite(template)
-        frames.append(frame)
+        frames.append(_compose_twist_frame(template, rotated, position))
     return _save_gif(frames, 100)
 
 

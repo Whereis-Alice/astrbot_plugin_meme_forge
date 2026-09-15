@@ -12,6 +12,7 @@ from PIL import Image
 from astrbot_plugin_meme_forge.core.engine import MemeEngine, MemeInputs
 from astrbot_plugin_meme_forge.core.gouqi_memes import (
     GouqiRenderError,
+    _compose_twist_frame,
     build_gouqi_memes,
 )
 
@@ -59,7 +60,33 @@ class GouqiMemeTests(unittest.TestCase):
                 SimpleNamespace(images=[("broken", b"not-image")], texts=[])
             )
 
+    def test_twist_restores_hidden_template_background_behind_transparency(self) -> None:
+        template = Image.new("RGBA", (20, 20), (12, 34, 56, 255))
+        # Keep the artwork RGB while making the input slot transparent, as in
+        # the reviewed Gouqi PNGs.
+        for y in range(6, 14):
+            for x in range(6, 14):
+                template.putpixel((x, y), (210, 180, 90, 0))
+
+        rotated = Image.new("RGBA", (8, 8), (0, 0, 0, 0))
+        rotated.putpixel((4, 4), (30, 200, 120, 255))
+        output = _compose_twist_frame(template, rotated, (6, 6))
+
+        self.assertEqual(output.getpixel((7, 7)), (210, 180, 90, 255))
+        self.assertEqual(output.getpixel((10, 10)), (30, 200, 120, 255))
+        self.assertEqual(output.getchannel("A").getextrema(), (255, 255))
+
+    def test_twist_does_not_invent_black_backdrop_without_hidden_artwork(self) -> None:
+        template = Image.new("RGBA", (12, 12), (12, 34, 56, 255))
+        for y in range(3, 9):
+            for x in range(3, 9):
+                template.putpixel((x, y), (0, 0, 0, 0))
+        rotated = Image.new("RGBA", (6, 6), (0, 0, 0, 0))
+
+        output = _compose_twist_frame(template, rotated, (3, 3))
+
+        self.assertEqual(output.getpixel((5, 5)), (0, 0, 0, 0))
+
 
 if __name__ == "__main__":
     unittest.main()
-

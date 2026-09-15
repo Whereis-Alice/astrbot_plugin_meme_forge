@@ -54,6 +54,11 @@ class MemeEmojiExtensionManager:
     SOURCE_REPOSITORY = "https://github.com/anyliew/meme_emoji"
     RUST_REPOSITORY = "https://github.com/anyliew/meme-emoji"
     USER_AGENT = "astrbot-plugin-meme-forge/1.0"
+    # ``meme-emoji`` started publishing the Rust toolchain in the asset name
+    # at build.55.  The pinned toolchain is the one used by the compatible
+    # ``meme_generator_core`` wheels; ``stable`` is a deliberate fallback for
+    # releases that do not publish the pinned build.
+    PREFERRED_RUST_TOOLCHAINS = ("1.93.1",)
     MAX_LIBRARY_BYTES = 64 * 1024 * 1024
     MAX_ARCHIVE_BYTES = 700 * 1024 * 1024
     MAX_RESOURCE_BYTES = 700 * 1024 * 1024
@@ -129,35 +134,69 @@ class MemeEmojiExtensionManager:
             return f"meme-emoji-linux-{architecture}.so"
         raise ExtensionInstallError(f"meme-emoji 暂不支持操作系统: {system_name}")
 
+    @classmethod
+    def platform_asset_names(
+        cls,
+        system: str | None = None,
+        machine: str | None = None,
+        environment: dict[str, str] | None = None,
+    ) -> tuple[str, ...]:
+        """Return exact release asset names in ABI-safe preference order.
+
+        Older releases used the unsuffixed filename, while newer releases
+        include either the Rust toolchain or ``stable`` before the extension.
+        Keep all candidates exact: a prefix match could accidentally select a
+        different architecture or operating-system build.
+        """
+        legacy_name = cls.platform_asset_name(system, machine, environment)
+        stem, extension = legacy_name.rsplit(".", 1)
+        candidates = [
+            f"{stem}-{toolchain}.{extension}"
+            for toolchain in cls.PREFERRED_RUST_TOOLCHAINS
+        ]
+        candidates.append(f"{stem}-stable.{extension}")
+        candidates.append(legacy_name)
+        return tuple(dict.fromkeys(candidates))
+
     async def latest_release(self) -> ExtensionRelease:
         session = await self._get_session()
         async with session.get(self.API_URL) as response:
             response.raise_for_status()
             payload = await response.json()
 
-        expected_name = self.platform_asset_name()
-        asset_payload = next(
-            (
-                asset
-                for asset in payload.get("assets", [])
-                if asset.get("name") == expected_name
-            ),
-            None,
+        candidate_names = self.platform_asset_names()
+        assets_by_name = {
+            str(asset.get("name")): asset
+            for asset in payload.get("assets", [])
+            if isinstance(asset, dict) and asset.get("name")
+        }
+        expected_name = next(
+            (name for name in candidate_names if name in assets_by_name), None
         )
+        asset_payload = assets_by_name.get(expected_name) if expected_name else None
         if asset_payload is None:
             raise ExtensionInstallError(
-                f"最新 release 没有当前平台构建: {expected_name}"
+                "最新 release 没有当前平台构建（候选名称："
+                + "、".join(candidate_names)
+                + "）"
             )
 
         digest = str(asset_payload.get("digest") or "")
         if not digest.startswith("sha256:"):
             raise ExtensionInstallError("release 未提供 SHA-256，已拒绝安装")
+        download_url = str(asset_payload.get("browser_download_url") or "")
+        if not download_url:
+            raise ExtensionInstallError("release 构建缺少下载地址，已拒绝安装")
+        try:
+            size = int(asset_payload["size"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ExtensionInstallError("release 构建缺少有效文件大小，已拒绝安装") from exc
         return ExtensionRelease(
             tag=str(payload["tag_name"]),
             asset=ReleaseAsset(
                 name=expected_name,
-                url=str(asset_payload["browser_download_url"]),
-                size=int(asset_payload["size"]),
+                url=download_url,
+                size=size,
                 sha256=digest.removeprefix("sha256:"),
             ),
         )

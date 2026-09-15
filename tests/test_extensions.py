@@ -6,7 +6,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import tomlkit
 
@@ -31,6 +31,36 @@ class ExtensionManagerTests(unittest.TestCase):
                 "Linux", "aarch64", {"ANDROID_ROOT": "/system"}
             ),
             "meme-emoji-android-aarch64.so",
+        )
+
+    def test_platform_asset_candidates_prefer_compatible_build(self) -> None:
+        self.assertEqual(
+            MemeEmojiExtensionManager.platform_asset_names("Linux", "x86_64", {}),
+            (
+                "meme-emoji-linux-x86_64-1.93.1.so",
+                "meme-emoji-linux-x86_64-stable.so",
+                "meme-emoji-linux-x86_64.so",
+            ),
+        )
+
+    def test_platform_asset_candidates_cover_android_and_macos(self) -> None:
+        self.assertEqual(
+            MemeEmojiExtensionManager.platform_asset_names(
+                "Linux", "aarch64", {"TERMUX_VERSION": "1"}
+            ),
+            (
+                "meme-emoji-android-aarch64-1.93.1.so",
+                "meme-emoji-android-aarch64-stable.so",
+                "meme-emoji-android-aarch64.so",
+            ),
+        )
+        self.assertEqual(
+            MemeEmojiExtensionManager.platform_asset_names("Darwin", "arm64", {}),
+            (
+                "meme-emoji-macos-aarch64-1.93.1.dylib",
+                "meme-emoji-macos-aarch64-stable.dylib",
+                "meme-emoji-macos-aarch64.dylib",
+            ),
         )
 
     def test_resource_path_rejects_traversal(self) -> None:
@@ -128,6 +158,58 @@ class ExtensionManagerTests(unittest.TestCase):
                 (destination / "b.txt").read_text(encoding="utf-8"), "old-b"
             )
             self.assertEqual(list(root.glob(".meme-emoji-backup-*")), [])
+
+
+class ExtensionReleaseTests(unittest.IsolatedAsyncioTestCase):
+    class _Response:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self.payload = payload
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        def raise_for_status(self) -> None:
+            return None
+
+        async def json(self) -> dict[str, object]:
+            return self.payload
+
+    class _Session:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self.payload = payload
+
+        def get(self, url: str):
+            del url
+            return ExtensionReleaseTests._Response(self.payload)
+
+    async def test_latest_release_accepts_versioned_asset_name(self) -> None:
+        manager = MemeEmojiExtensionManager(Path("/tmp/meme-forge-data"), {})
+        candidates = manager.platform_asset_names()
+        selected = candidates[0]
+        manager._get_session = AsyncMock(  # type: ignore[method-assign]
+            return_value=ExtensionReleaseTests._Session(
+                {
+                    "tag_name": "v0.0.6+build.55",
+                    "assets": [
+                        {
+                            "name": selected,
+                            "browser_download_url": "https://example.com/library",
+                            "size": 123,
+                            "digest": "sha256:" + "a" * 64,
+                        }
+                    ],
+                }
+            )
+        )
+
+        release = await manager.latest_release()
+
+        self.assertEqual(release.tag, "v0.0.6+build.55")
+        self.assertEqual(release.asset.name, selected)
+        self.assertEqual(release.asset.sha256, "a" * 64)
 
 
 if __name__ == "__main__":
